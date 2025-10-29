@@ -1,0 +1,27 @@
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": [
+        "cloudaudit:DescribeAuditTracks",
+        "cloudaudit:CreateAuditTrack",
+        "cloudaudit:ModifyAuditTrack"
+      ],
+      "resource": [
+        "*"
+      ]
+    },
+    {
+      "effect": "allow",
+      "action": [
+        "cos:HeadBucket",
+        "cos:PutBucket",
+        "cos:GetBucket"
+      ],
+      "resource": [
+        "*"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+# SCF Resource Tagger Dependencies
+# 
+# Core Tencent Cloud SDK for CloudAudit, Tag, and COS services
+tencentcloud-sdk-python>=3.0.110
+
+# COS (Cloud Object Storage) SDK for reading audit logs
+cos-python-sdk-v5>=1.9.24
+
+# Date/time utilities for tag generation
+python-dateutil>=2.9.0
+
+# HTTP client dependencies (pinned for compatibility)
+requests==2.31.0
+urllib3<2.0
