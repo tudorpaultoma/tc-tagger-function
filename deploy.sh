@@ -12,15 +12,18 @@ echo "🚀 Building SCF Resource Tagger deployment package..."
 # Clean up any existing build artifacts
 echo "🧹 Cleaning up previous builds..."
 rm -rf package/ build/ dist/ *.zip
+find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+find . -name "*.pyc" -delete 2>/dev/null || true
 
 # Create package directory for dependencies
 echo "📦 Installing dependencies..."
 mkdir -p package
-pip install -r requirements.txt -t package/ --no-deps
+pip3 install -r requirements.txt -t package/ --upgrade --no-cache-dir
 
-# Create deployment package
+# Create deployment package - dependencies at root level for SCF
 echo "📁 Creating deployment package..."
-zip -r scf-tagger.zip index.py package/ -x "*.pyc" "*/__pycache__/*" "*.DS_Store"
+cd package && zip -r ../scf-tagger.zip . -x "*.pyc" "*/__pycache__/*" "*.DS_Store" && cd ..
+zip -g scf-tagger.zip index.py
 
 # Display package info
 echo "✅ Deployment package created: scf-tagger.zip"

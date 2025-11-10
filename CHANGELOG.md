@@ -56,6 +56,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Architecture diagrams
 - Local development setup
 
+## [1.1.0] - 2025-11-03
+
+### Added
+- **CVM Launch Template Support**: Extended tagging to support CVM Launch Templates
+  - Added `CreateLaunchTemplate` event handling
+  - Implemented QCS format: `qcs::cvm:region:uin/account:launch-template/template-id`
+  - Launch templates now receive the same standardized tags as CVM instances
+
+### Enhanced
+- **CloudAudit Track Configuration**: Updated EventNames to include both `RunInstances` and `CreateLaunchTemplate`
+- **Event Filtering**: Enhanced `should_tag()` to recognize `createlaunchtemplate` events
+- **QCS Extraction**: Added launch template QCS building with fallback mechanisms (resourceSet → responseElements)
+
+### Technical Details
+- **Minimal Changes**: Built on proven v1.0.0 codebase with minimal modifications
+- **Backward Compatibility**: Maintains full compatibility with existing CVM instance tagging
+- **Same Tag Schema**: Launch templates receive identical tags as instances
+
 ## [Unreleased]
 
 ### Planned Features

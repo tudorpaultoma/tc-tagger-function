@@ -1,14 +1,21 @@
 # SCF Resource Tagger
 
-An automated Tencent Cloud Serverless Cloud Function (SCF) that automatically tags newly created CVM instances based on CloudAudit events delivered to COS (Cloud Object Storage).
+An automated Tencent Cloud Serverless Cloud Function (SCF) that automatically tags newly created cloud resources based on CloudAudit events delivered to COS (Cloud Object Storage).
 
 ## Overview
 
-This SCF function monitors CloudAudit logs stored in COS and automatically applies standardized tags to newly created CVM instances. When a `RunInstances` event is detected, the function extracts resource information and applies tags for better resource management and cost tracking.
+This SCF function monitors CloudAudit logs stored in COS and automatically applies standardized tags to newly created cloud resources. When supported creation events are detected, the function extracts resource information and applies tags for better resource management and cost tracking.
+
+## Supported Services
+
+### 🖥️ **CVM (Cloud Virtual Machine)**
+- **Instances** - `RunInstances` events
+- **Launch Templates** - `CreateLaunchTemplate` events
 
 ## Features
 
-- **Automatic Tagging**: Tags CVM instances immediately after creation
+- **CVM Support**: Tags CVM instances and launch templates automatically
+- **Automatic Tagging**: Tags resources immediately after creation
 - **CloudAudit Integration**: Processes CloudAudit events from COS storage
 - **Flexible Owner Detection**: Prioritizes email, username, account ID, or UIN for owner identification
 - **Standardized Tags**: Applies consistent tagging schema across resources
@@ -17,7 +24,7 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 ## Applied Tags
 
-The function applies the following tags to new CVM instances:
+The function applies the following tags to all supported resources:
 
 | Tag Key | Description | Example Value |
 |---------|-------------|---------------|
@@ -33,10 +40,14 @@ The function applies the following tags to new CVM instances:
 CloudAudit → COS Bucket → SCF Trigger → Tag Resources
 ```
 
-1. **CloudAudit** captures CVM creation events (`RunInstances`)
-2. **COS** stores audit logs in structured format
+1. **CloudAudit** captures resource creation events (CVM, CBS, etc.)
+2. **COS** stores audit logs in structured format  
 3. **SCF** processes new log files via COS triggers
 4. **Tag API** applies standardized tags to resources
+
+### Supported Events
+- `RunInstances` - CVM instances
+- `CreateLaunchTemplate` - CVM launch templates
 
 ## Prerequisites
 
@@ -160,7 +171,7 @@ Attach the following policies to your SCF execution role:
 
 The function automatically configures CloudAudit tracks with:
 - **Track Name**: `{region-short}-tagger-track` (e.g., `fra-tagger-track`)
-- **Event Filter**: Only `RunInstances` events from CVM service
+- **Event Filter**: `RunInstances` and `CreateLaunchTemplate` events from CVM service
 - **Storage**: COS bucket with prefix `cloudaudit/{region}`
 
 ## Usage
@@ -174,16 +185,6 @@ Once deployed and configured, the function operates automatically:
 3. Event is stored in COS bucket
 4. SCF function is triggered by new COS object
 5. Function processes the event and tags the instance
-
-### Manual Testing
-
-Use the provided test files for local testing:
-
-```bash
-python3 test_extract.py
-```
-
-This tests the core extraction and tagging logic with sample data.
 
 ### Monitoring
 
@@ -241,9 +242,6 @@ scf-tagger/
 │   ├── cos-policy.json
 │   ├── audit-policy.json
 │   └── tag-policy.json
-├── tests/                      # Test files
-│   ├── test_event.json
-│   └── test_extract.py
 ├── package/                    # Dependencies (created by pip install -t)
 └── README.md
 ```
@@ -255,12 +253,7 @@ scf-tagger/
    pip install -r requirements.txt
    ```
 
-2. **Run Tests**:
-   ```bash
-   python3 tests/test_extract.py
-   ```
-
-3. **Code Style**:
+2. **Code Style**:
    - Follow PEP 8 guidelines
    - Use type hints where appropriate
    - Add docstrings for functions
@@ -270,8 +263,7 @@ scf-tagger/
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+4. Submit a pull request
 
 ## Security Considerations
 
