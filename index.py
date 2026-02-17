@@ -219,11 +219,12 @@ def build_tags(owner: str) -> List[Dict[str, str]]:
     """
     today = datetime.date.today().isoformat()
     return [
-        {"TagKey": "TaggerOwner",    "TagValue": owner or "unknown"},
-        {"TagKey": "TaggerCreated",  "TagValue": today},
-        {"TagKey": "TaggerLifeDays", "TagValue": "1"},
-        {"TagKey": "TaggerAutoOff",  "TagValue": "YES"},
-        {"TagKey": "TaggerProject",  "TagValue": "n/a"},
+        {"TagKey": "TaggerOwner",     "TagValue": owner or "unknown"},
+        {"TagKey": "TaggerCreated",   "TagValue": today},
+        {"TagKey": "TaggerLifeDays",  "TagValue": "1"},
+        {"TagKey": "TaggerAutoOff",   "TagValue": "YES"},
+        {"TagKey": "TaggerAutoStart", "TagValue": "NO"},
+        {"TagKey": "TaggerProject",   "TagValue": "n/a"},
     ]
 
 
