@@ -224,6 +224,7 @@ def build_tags(owner: str) -> List[Dict[str, str]]:
         {"TagKey": "TaggerLifeDays",  "TagValue": "1"},
         {"TagKey": "TaggerAutoOff",   "TagValue": "YES"},
         {"TagKey": "TaggerAutoStart", "TagValue": "NO"},
+        {"TagKey": "TaggerTTL",       "TagValue": "7"},
         {"TagKey": "TaggerProject",   "TagValue": "n/a"},
     ]
 
