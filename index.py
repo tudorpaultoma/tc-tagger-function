@@ -2,12 +2,14 @@
 """
 SCF Resource Tagger
 
-Automatically tags newly created CVM instances based on CloudAudit events.
+Automatically tags newly created CVM instances and CDH (Dedicated Hosts) based on CloudAudit events.
 This SCF function processes CloudAudit logs delivered to COS and applies
 standardized tags to resources for better management and cost tracking.
 
+CloudAudit tracks are global and automatically monitor all regions.
+
 Author: Tudor Toma
-Version: 1.0.0
+Version: 1.3.0
 License: Apache 2.0
 """
 
@@ -40,22 +42,10 @@ from tencentcloud.tag.v20180813 import tag_client, models as tag_models
 from tencentcloud.cloudaudit.v20190319 import cloudaudit_client, models as audit_models
 
 # Configuration from environment variables
-COS_BUCKET      = os.getenv("COS_BUCKET")
-COS_REGION      = os.getenv("COS_REGION")
-COS_PREFIX      = (os.getenv("COS_PREFIX") or "").strip().rstrip("/")
-COS_BASE_PREFIX = (os.getenv("COS_BASE_PREFIX") or "cloudaudit").strip().rstrip("/")
-
-
-def region_short(region: str) -> str:
-    """
-    Convert region name to short form for naming conventions.
-    e.g. 'eu-frankfurt' -> 'fra'
-    """
-    if not isinstance(region, str) or not region:
-        return "unk"
-    parts = region.split("-")
-    tail = parts[-1] if parts else region
-    return tail[:3].lower()
+COS_BUCKET       = os.getenv("COS_BUCKET")
+COS_REGION       = os.getenv("COS_REGION")
+COS_PREFIX       = (os.getenv("COS_PREFIX") or "").strip().rstrip("/")
+COS_BASE_PREFIX  = (os.getenv("COS_BASE_PREFIX") or "cloudaudit").strip().rstrip("/")
 
 
 def _build_cred():
@@ -129,19 +119,31 @@ def ensure_cos_bucket(bucket: str, region: str) -> bool:
 
 def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     """
-    Ensure a CloudAudit track exists that delivers CVM RunInstances events to COS.
-    Returns the TrackId if successful.
+    Ensure a CloudAudit track exists that delivers CVM and CDH creation events to COS.
+    Tracks both RunInstances (CVM) and AllocateHosts (CDH) events across ALL regions.
+    
+    Note: CloudAudit tracks are global and automatically monitor all regions.
+    
+    Args:
+        bucket_region: The region where the COS bucket is located
+        bucket: The COS bucket name
+    
+    Returns:
+        TrackId if successful, None otherwise
     """
     if not bucket_region or not bucket:
         print(json.dumps({"step": "audit_track", "error": "missing bucket_region or bucket"}))
         return None
 
-    client = make_tc_client("cloudaudit", cloudaudit_client.CloudauditClient, bucket_region)
+    # CloudAudit API is only available in ap-guangzhou
+    # CloudAudit tracks automatically monitor ALL regions globally
+    CLOUDAUDIT_API_REGION = "ap-guangzhou"
+    client = make_tc_client("cloudaudit", cloudaudit_client.CloudauditClient, CLOUDAUDIT_API_REGION)
     if client is None:
-        print(json.dumps({"step": "audit_track", "error": "no SDK credentials available"}))
+        print(json.dumps({"step": "audit_track", "error": "no SDK credentials available", "api_region": CLOUDAUDIT_API_REGION}))
         return None
 
-    track_name = f"{region_short(bucket_region)}-tagger-track"
+    track_name = "tagger-global-track"
     # Prepare storage config
     storage = audit_models.Storage()
     setattr(storage, "StorageType", "cos")
@@ -185,12 +187,12 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
                 setattr(mreq, "Status", 1)
                 setattr(mreq, "ActionType", "Write")
                 setattr(mreq, "ResourceType", "cvm")
-                setattr(mreq, "EventNames", ["RunInstances"])
+                setattr(mreq, "EventNames", ["RunInstances", "AllocateHosts"])
                 setattr(mreq, "Storage", storage)
                 client.ModifyAuditTrack(mreq)
-                print(json.dumps({"step": "audit_track", "status": "updated", "track_id": track_id}))
+                print(json.dumps({"step": "audit_track", "status": "updated", "track_id": track_id, "scope": "all_regions"}))
             else:
-                print(json.dumps({"step": "audit_track", "status": "exists", "track_id": track_id}))
+                print(json.dumps({"step": "audit_track", "status": "exists", "track_id": track_id, "scope": "all_regions"}))
         else:
             # Create new track
             creq = audit_models.CreateAuditTrackRequest()
@@ -198,11 +200,11 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
             setattr(creq, "Status", 1)
             setattr(creq, "ActionType", "Write")
             setattr(creq, "ResourceType", "cvm")
-            setattr(creq, "EventNames", ["RunInstances"])
+            setattr(creq, "EventNames", ["RunInstances", "AllocateHosts"])
             setattr(creq, "Storage", storage)
             cresp = client.CreateAuditTrack(creq)
             track_id = getattr(cresp, "TrackId", None)
-            print(json.dumps({"step": "audit_track", "status": "created", "track_id": track_id}))
+            print(json.dumps({"step": "audit_track", "status": "created", "track_id": track_id, "scope": "all_regions"}))
     except Exception as e:
         tb = traceback.format_exc()
         print(json.dumps({
@@ -213,6 +215,27 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     return track_id
 
 
+def ensure_audit_tracks_all_regions(bucket_region: str, bucket: str) -> Dict[str, Optional[str]]:
+    """
+    Ensure a global CloudAudit track exists.
+    CloudAudit tracks automatically monitor all regions by default.
+    
+    Returns:
+        Dictionary with single track_id
+    """
+    print(json.dumps({
+        "step": "audit_setup",
+        "cos_bucket_region": bucket_region,
+        "note": "CloudAudit tracks monitor all regions globally"
+    }))
+    
+    # Create or update the single global track
+    track_id = ensure_audit_track_to_cos(bucket_region, bucket)
+    
+    # Return dict with track info
+    return {"global": track_id}
+
+
 def build_tags(owner: str) -> List[Dict[str, str]]:
     """
     Build standardized tags for resources.
@@ -221,7 +244,6 @@ def build_tags(owner: str) -> List[Dict[str, str]]:
     return [
         {"TagKey": "TaggerOwner",     "TagValue": owner or "unknown"},
         {"TagKey": "TaggerCreated",   "TagValue": today},
-        {"TagKey": "TaggerLifeDays",  "TagValue": "1"},
         {"TagKey": "TaggerAutoOff",   "TagValue": "YES"},
         {"TagKey": "TaggerAutoStart", "TagValue": "NO"},
         {"TagKey": "TaggerTTL",       "TagValue": "7"},
@@ -277,7 +299,10 @@ def extract_region(rec: Dict[str, Any]) -> Optional[str]:
 
 def extract_qcs(rec: Dict[str, Any]) -> Optional[str]:
     """
-    Build QCS identifier for a CVM instance creation event.
+    Build QCS identifier for CVM instance or CDH creation events.
+    Supports:
+    - CVM RunInstances events -> qcs::cvm:{region}:uin/{uin}:instance/{instance_id}
+    - CDH AllocateHosts events -> qcs::cvm:{region}:uin/{uin}:host/{host_id}
     """
     # Direct QCS field?
     for key in ("resourceId", "resource", "resourceQcs", "qcs", "targetResource"):
@@ -309,6 +334,7 @@ def extract_qcs(rec: Dict[str, Any]) -> Optional[str]:
                 ids  = resp.get("InstanceIdSet", [])
                 if ids:
                     instance_id = ids[0]
+                    resource_region = None  # Initialize
                     # Determine region from requestParameters if missing
                     if not resource_region:
                         req_params_raw = rec.get("requestParameters", {})
@@ -334,6 +360,63 @@ def extract_qcs(rec: Dict[str, Any]) -> Optional[str]:
                     if instance_id and resource_region:
                         part = f"uin/{owner_uin}" if owner_uin else ""
                         return f"qcs::cvm:{resource_region}:{part}:instance/{instance_id}"
+            except Exception:
+                pass
+
+    # Handle CDH AllocateHosts events
+    if evt == "AllocateHosts":
+        # Try resourceSet first
+        resource_set = rec.get("resourceSet", [])
+        if resource_set and isinstance(resource_set[0], dict):
+            host_id         = resource_set[0].get("resourceId")
+            resource_region = resource_set[0].get("resourceRegion")
+            user_id         = rec.get("userIdentity", {})
+            if isinstance(user_id, dict):
+                owner_uin = user_id.get("accountId") or user_id.get("principalId") or user_id.get("ownerUin") or ""
+            else:
+                owner_uin = ""
+            if host_id and resource_region:
+                return f"qcs::cvm:{resource_region}:uin/{owner_uin}:host/{host_id}"
+
+        # Fallback: parse responseElements
+        resp_str = rec.get("responseElements", "")
+        if resp_str and "HostIdSet" in resp_str:
+            try:
+                resp = json.loads(resp_str)
+                ids  = resp.get("HostIdSet", [])
+                if ids:
+                    host_id = ids[0]
+                    resource_region = None
+                    # Determine region from requestParameters if missing
+                    if not resource_region:
+                        req_params_raw = rec.get("requestParameters", {})
+                        # Parse if it's a JSON string
+                        if isinstance(req_params_raw, str):
+                            try:
+                                req_params = json.loads(req_params_raw)
+                            except Exception:
+                                req_params = {}
+                        else:
+                            req_params = req_params_raw if isinstance(req_params_raw, dict) else {}
+                        
+                        placement = req_params.get("Placement", {})
+                        zone = placement.get("Zone", "")
+                        if zone:
+                            resource_region = "-".join(zone.split("-")[:-1])
+                    
+                    # Extract region from event if still missing
+                    if not resource_region:
+                        resource_region = extract_region(rec)
+                    
+                    # owner uin
+                    user_id = rec.get("userIdentity", {})
+                    if isinstance(user_id, dict):
+                        owner_uin = user_id.get("accountId") or user_id.get("principalId") or user_id.get("ownerUin") or ""
+                    else:
+                        owner_uin = ""
+                    if host_id and resource_region:
+                        part = f"uin/{owner_uin}" if owner_uin else ""
+                        return f"qcs::cvm:{resource_region}:{part}:host/{host_id}"
             except Exception:
                 pass
 
@@ -441,9 +524,10 @@ def normalize_key_for_prefix(key: str, bucket: str) -> str:
 def should_tag(rec: Dict[str, Any]) -> bool:
     """
     Decide if an event is a resource creation we want to tag.
+    Supports CVM instances (RunInstances) and CDH hosts (AllocateHosts).
     """
     op = (rec.get("eventName") or rec.get("operationName") or rec.get("action") or "").lower()
-    return ("create" in op) or (op in ("runinstances", "createinstance", "createcluster"))
+    return ("create" in op) or (op in ("runinstances", "createinstance", "createcluster", "allocatehosts"))
 
 
 def main_handler(event, context):
@@ -453,13 +537,13 @@ def main_handler(event, context):
     if not COS_BUCKET or not COS_REGION:
         return {"status": "error", "error": "COS_BUCKET and COS_REGION must be set"}
 
-    # Ensure COS bucket and CloudAudit track
+    # Ensure COS bucket and CloudAudit tracks for all monitored regions
     setup_ok = ensure_cos_bucket(COS_BUCKET, COS_REGION)
-    track_id = None
+    track_ids = {}
     if os.getenv("AUDIT_SETUP", "true").lower() != "false":
-        track_id = ensure_audit_track_to_cos(COS_REGION, COS_BUCKET)
+        track_ids = ensure_audit_tracks_all_regions(COS_REGION, COS_BUCKET)
 
-    setup_status = {"cos_bucket_ok": setup_ok, "track_id": track_id}
+    setup_status = {"cos_bucket_ok": setup_ok, "track_ids": track_ids, "monitored_regions": list(track_ids.keys())}
 
     records  = event.get("Records") or []
     processed, tagged = 0, 0

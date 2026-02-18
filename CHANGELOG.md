@@ -5,7 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.0.0] - 2025-10-27
+## [1.3.0] - 2025-02-18
+
+### Fixed
+- **CloudAudit Multi-Region Architecture**: Corrected implementation to use single global CloudAudit track
+  - Fixed `UnsupportedRegion` error when attempting region-specific track creation
+  - CloudAudit API calls now correctly use `ap-guangzhou` region (Tencent Cloud requirement)
+  - Removed unnecessary `MONITORED_REGIONS` environment variable
+  - Single track (`tagger-global-track`) now monitors all regions automatically
+
+### Changed
+- Simplified CloudAudit track management from per-region to global approach
+- Updated documentation to reflect correct global monitoring architecture
+- Removed region-specific track naming and creation logic
+
+### Technical Details
+- CloudAudit tracks are inherently global and monitor all regions by default
+- CloudAudit API is only available in `ap-guangzhou` region
+- Cross-region log delivery to any COS bucket works automatically
+- Version bump from 1.2.0 to 1.3.0
+
+## [1.2.0] - 2025-02-17 [YANKED]
+
+**Note**: This version introduced incorrect multi-region architecture and has been superseded by v1.3.0.
+
+### Added
+- CDH (Cloud Dedicated Host) auto-tagging support
+- `TaggerAutoStart` tag (default: NO) for manual start requirement
+- `TaggerTTL` tag (default: 7 days) for automatic deletion scheduling
+- Support for `AllocateHosts` events
+
+### Removed
+- `TaggerLifeDays` tag (replaced by TaggerTTL)
+
+### Issues
+- Attempted per-region CloudAudit track creation (incorrect approach)
+- Failed in regions where CloudAudit API is not available
+
+## [1.1.0] - 2025-11-03
 
 ### Added
 - Initial release of SCF Resource Tagger

@@ -10,17 +10,20 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 ### 🖥️ **CVM (Cloud Virtual Machine)**
 - **Instances** - `RunInstances` events
-- **Launch Templates** - `CreateLaunchTemplate` events
+
+### 🏢 **CDH (Cloud Dedicated Host)**
+- **Dedicated Hosts** - `AllocateHosts` events
 
 ## Features
 
-- **CVM Support**: Tags CVM instances and launch templates automatically
+- **Global Multi-Region Support**: Automatically monitors and tags resources across ALL Tencent Cloud regions
+- **Multi-Resource Support**: Tags CVM instances and CDH hosts automatically
 - **Automatic Tagging**: Tags resources immediately after creation
-- **CloudAudit Integration**: Processes CloudAudit events from COS storage
+- **CloudAudit Integration**: Single global CloudAudit track monitors all regions
 - **Flexible Owner Detection**: Prioritizes email, username, account ID, or UIN for owner identification
 - **Standardized Tags**: Applies consistent tagging schema across resources
 - **Error Handling**: Robust error handling with detailed logging
-- **Self-Setup**: Automatically configures CloudAudit tracks if needed
+- **Self-Setup**: Automatically configures CloudAudit track if needed
 
 ## Applied Tags
 
@@ -29,25 +32,28 @@ The function applies the following tags to all supported resources:
 | Tag Key | Description | Example Value |
 |---------|-------------|---------------|
 | `TaggerOwner` | Resource owner (email, username, or account ID) | `john.doe@company.com` or `account:1301327510` |
-| `TaggerCreated` | Creation date | `2025-10-27` |
-| `TaggerLifeDays` | Default lifecycle in days | `1` |
-| `TaggerAutoOff` | Auto-shutdown flag | `YES` |
+| `TaggerCreated` | Creation date | `2025-02-17` |
+| `TaggerAutoOff` | Auto-shutdown flag for power management | `YES` |
+| `TaggerAutoStart` | Auto-start flag (requires manual start if NO) | `NO` |
+| `TaggerTTL` | Time-to-live in days before deletion | `7` |
 | `TaggerProject` | Project designation | `n/a` |
 
 ## Architecture
 
 ```
-CloudAudit → COS Bucket → SCF Trigger → Tag Resources
+CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 ```
 
-1. **CloudAudit** captures resource creation events (CVM, CBS, etc.)
+1. **CloudAudit** captures resource creation events from all regions globally
 2. **COS** stores audit logs in structured format  
 3. **SCF** processes new log files via COS triggers
 4. **Tag API** applies standardized tags to resources
 
+**Note**: CloudAudit tracks are global by default - a single track monitors all regions automatically.
+
 ### Supported Events
 - `RunInstances` - CVM instances
-- `CreateLaunchTemplate` - CVM launch templates
+- `AllocateHosts` - CDH dedicated hosts
 
 ## Prerequisites
 
@@ -163,16 +169,19 @@ Attach the following policies to your SCF execution role:
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `COS_BUCKET` | Yes | - | COS bucket name for audit logs |
-| `COS_REGION` | Yes | - | COS bucket region |
+| `COS_REGION` | Yes | - | COS bucket region (where logs are stored) |
 | `COS_BASE_PREFIX` | No | `cloudaudit` | Base prefix for audit logs |
-| `AUDIT_SETUP` | No | `true` | Auto-setup CloudAudit tracks |
+| `AUDIT_SETUP` | No | `true` | Auto-setup CloudAudit track |
 
 ### CloudAudit Configuration
 
-The function automatically configures CloudAudit tracks with:
-- **Track Name**: `{region-short}-tagger-track` (e.g., `fra-tagger-track`)
-- **Event Filter**: `RunInstances` and `CreateLaunchTemplate` events from CVM service
-- **Storage**: COS bucket with prefix `cloudaudit/{region}`
+The function automatically configures a global CloudAudit track:
+- **Single Global Track**: `tagger-global-track` monitors all regions automatically
+- **Event Filter**: `RunInstances` (CVM) and `AllocateHosts` (CDH) events
+- **Storage**: Delivers logs to the COS bucket specified in `COS_BUCKET`/`COS_REGION`
+- **API Region**: CloudAudit API calls are made via `ap-guangzhou` (Tencent Cloud requirement)
+
+**Note**: CloudAudit tracks are inherently global - one track automatically captures events from all Tencent Cloud regions.
 
 ## Usage
 
@@ -180,11 +189,11 @@ The function automatically configures CloudAudit tracks with:
 
 Once deployed and configured, the function operates automatically:
 
-1. Create a new CVM instance in any region
-2. CloudAudit captures the `RunInstances` event
+1. Create a new CVM instance or CDH host in any region
+2. CloudAudit captures the `RunInstances` or `AllocateHosts` event
 3. Event is stored in COS bucket
 4. SCF function is triggered by new COS object
-5. Function processes the event and tags the instance
+5. Function processes the event and tags the resource
 
 ### Monitoring
 
