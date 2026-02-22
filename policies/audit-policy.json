@@ -6,7 +6,8 @@
       "action": [
         "cloudaudit:DescribeAuditTracks",
         "cloudaudit:CreateAuditTrack",
-        "cloudaudit:ModifyAuditTrack"
+        "cloudaudit:ModifyAuditTrack",
+        "cloudaudit:DeleteAuditTrack"
       ],
       "resource": [
         "*"

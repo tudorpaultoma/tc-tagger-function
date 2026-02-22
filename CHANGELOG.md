@@ -5,6 +5,103 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-02-22
+
+### Fixed
+- **CloudAudit Track Configuration**: Switched to separate tracks per service type
+  - CloudAudit API requires specific `ResourceType` (does not support wildcard `*` with EventNames)
+  - Track 1: `tagger-cvm-track` → monitors CVM/CDH (`RunInstances`, `AllocateHosts`)
+  - Track 2: `tagger-clb-track` → monitors CLB (`CreateLoadBalancer`)
+  - Both tracks deliver to same COS bucket → single SCF function processes all events
+
+### Changed
+- **Architecture**: Multi-track approach replaces single global track
+  - Each service type gets dedicated CloudAudit track
+  - Cleaner separation of concerns
+  - Easier to add new service types in future
+  
+### Added
+- **IAM Permission**: `cloudaudit:DeleteAuditTrack` added to audit-policy.json
+  - Required for track recreation during configuration updates
+
+### Technical Details
+- CloudAudit limitation discovered: `ResourceType: "*"` + `EventNames` is invalid
+- Track deletion/recreation logic replaces update logic (simpler, more reliable)
+- Function now manages multiple track lifecycles
+
+### Known Issues
+- **CBS Tagging**: Multiple blockers prevent CBS auto-tagging:
+  1. CloudAudit does not support CBS event names (API returns "illegal params")
+  2. CBS Tag API returns success but CBS service doesn't honor tags
+  3. Tags appear in Tag service but not in CBS console/API
+  - Support ticket submitted to Tencent Cloud for both issues
+
+## [1.5.0] - 2026-02-22
+
+### Added
+- **CLB (Cloud Load Balancer) Support**: Automatic tagging for load balancers ✅
+  - Handles `CreateLoadBalancer` CloudAudit events
+  - Full Tag API support (verified working)
+  - CLB-specific tag schema (TaggerOwner, TaggerCreated, TaggerTTL, TaggerDelete, TaggerProject)
+  - Uses `TaggerDelete` instead of `TaggerAutoOff`/`TaggerAutoStart` (CLBs can only be created/deleted)
+  - High-cost resource prioritization for better cost tracking
+
+### Changed
+- CloudAudit track now monitors CLB events: `CreateLoadBalancer`
+- Updated README with CLB support and CBS limitation status
+- Separated tag documentation by resource type (Compute vs Network vs Storage)
+- Version bump from 1.4.0 to 1.5.0
+
+### Technical Details
+- New `build_clb_tags()` function for CLB-specific tag generation
+- New `handle_clb_tagging()` function for CLB event processing
+- New `extract_account_uin()` helper function for UIN extraction
+- QCS format: `qcs::clb:{region}:uin/{uin}:clb/{lb_id}`
+- Load balancer ID extraction from `resourceSet` and `responseElements.LoadBalancerIds`
+- Immediate tagging on creation (no delay needed)
+
+### Known Issues
+- **CBS Tagging Limitation**: CBS disk tagging remains work in progress
+  - Tag API returns success but CBS service doesn't honor tags
+  - Tags visible in Tag service but not in CBS console/API
+  - Support ticket submitted to Tencent Cloud (#SUPPORT_TICKET.md)
+  - Marked as ⚠️ in documentation
+
+## [1.4.0] - 2025-02-20
+
+### Added
+- **CBS (Cloud Block Storage) Support**: Automatic tagging for CBS disks
+  - Handles `CreateCbsStorages` and `AttachDisks` CloudAudit events
+  - Smart tagging strategy based on disk attachment state
+  - Added `TaggerUsage` tag (SYSTEM or DATA) to identify disk type
+  - Added `TaggerLinkedCVM` tag (YES or NO) to track CVM attachment
+  
+### Features
+- **Attached Disk Tagging**: Copies `TaggerProject` from associated CVM
+  - Recreates `TaggerOwner`, `TaggerCreated`, `TaggerTTL` from audit event
+  - Waits 10 minutes for CVM tags to propagate before tagging
+  
+- **Unattached Disk Tagging**: Applies default tags with empty project
+  - 10-minute grace period before tagging (allows user to attach)
+  
+- **Re-attachment Support**: Updates tags when disk moved between CVMs
+  - `AttachDisks` event triggers project tag update from new CVM
+
+### Changed
+- CloudAudit track now monitors CBS events: `CreateCbsStorages`, `AttachDisks`
+- CBS disks excluded from receiving `TaggerAutoOff` and `TaggerAutoStart` tags
+- Version bump from 1.3.0 to 1.4.0
+
+### Technical Details
+- **Event Name Discovery**: CloudAudit uses `CreateCbsStorages` (not `CreateDisks`) for CBS creation
+- New CBS API integration (`tencentcloud.cbs.v20170312`)
+- Added `get_disk_info()` - query disk state, attachment, usage type
+- Added `get_cvm_tags()` - read tags from CVM instances
+- Added `build_cbs_tags()` - generate CBS-specific tag set
+- Added `handle_cbs_tagging()` - main CBS event handler with 10-minute age check
+- Disk ID extraction from `resourceSet` field in console-created events
+- Disk age validation prevents premature tagging
+
 ## [1.3.0] - 2025-02-18
 
 ### Fixed

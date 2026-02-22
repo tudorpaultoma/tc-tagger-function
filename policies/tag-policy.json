@@ -4,7 +4,8 @@
     {
       "effect": "allow",
       "action": [
-        "tag:TagResources"
+        "tag:TagResources",
+        "tag:DescribeResourceTagsByResourceIds"
       ],
       "resource": [
         "*"

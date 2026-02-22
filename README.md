@@ -8,26 +8,38 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 ## Supported Services
 
-### 🖥️ **CVM (Cloud Virtual Machine)**
+### 🖥️ **CVM (Cloud Virtual Machine)** ✅
 - **Instances** - `RunInstances` events
 
-### 🏢 **CDH (Cloud Dedicated Host)**
+### 🏢 **CDH (Cloud Dedicated Host)** ✅
 - **Dedicated Hosts** - `AllocateHosts` events
+
+### ⚖️ **CLB (Cloud Load Balancer)** ✅
+- **Load Balancers** - `CreateLoadBalancer` events
+- **Full Tag API Support**: Tags are properly applied and visible in CLB console
+
+### 💾 **CBS (Cloud Block Storage)** ⚠️ **Work in Progress**
+- **Disks** - CBS event monitoring currently disabled
+- **Status**: CloudAudit does not support CBS event names (`CreateCbsStorages`, `AttachDisks`)
+- **Known Issues**: 
+  1. CloudAudit API rejects CBS event names with "illegal params" error
+  2. CBS Tag API returns success but CBS service doesn't honor tags
+- **Support Ticket**: Submitted to Tencent Cloud for clarification
 
 ## Features
 
 - **Global Multi-Region Support**: Automatically monitors and tags resources across ALL Tencent Cloud regions
-- **Multi-Resource Support**: Tags CVM instances and CDH hosts automatically
+- **Multi-Resource Support**: Tags CVM instances, CDH hosts, and CLB load balancers automatically
 - **Automatic Tagging**: Tags resources immediately after creation
-- **CloudAudit Integration**: Single global CloudAudit track monitors all regions
+- **CloudAudit Integration**: Separate CloudAudit tracks per service type for reliable event delivery
 - **Flexible Owner Detection**: Prioritizes email, username, account ID, or UIN for owner identification
 - **Standardized Tags**: Applies consistent tagging schema across resources
 - **Error Handling**: Robust error handling with detailed logging
-- **Self-Setup**: Automatically configures CloudAudit track if needed
+- **Self-Setup**: Automatically configures CloudAudit tracks if needed
 
 ## Applied Tags
 
-The function applies the following tags to all supported resources:
+### CVM and CDH Tags (Compute Resources)
 
 | Tag Key | Description | Example Value |
 |---------|-------------|---------------|
@@ -37,6 +49,33 @@ The function applies the following tags to all supported resources:
 | `TaggerAutoStart` | Auto-start flag (requires manual start if NO) | `NO` |
 | `TaggerTTL` | Time-to-live in days before deletion | `7` |
 | `TaggerProject` | Project designation | `n/a` |
+
+**Note**: These tags apply to resources with start/stop operations (CVM instances, CDH hosts).
+
+### CLB Tags (Network Resources)
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `john.doe@company.com` or `account:1301327510` |
+| `TaggerCreated` | Creation date | `2025-02-22` |
+| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerDelete` | Auto-deletion flag | `YES` |
+| `TaggerProject` | Project designation | `n/a` |
+
+**Note**: CLB resources can only be created or deleted (no start/stop operations), so they use `TaggerDelete` instead of `TaggerAutoOff`/`TaggerAutoStart`.
+
+### CBS Disk Tags ⚠️
+
+| Tag Key | Description | Example Value | Status |
+|---------|-------------|---------------|--------|
+| `TaggerOwner` | Disk creator (email, username, or account ID) | `john.doe@company.com` | ⚠️ Not visible in CBS |
+| `TaggerCreated` | Creation date | `2025-02-20` | ⚠️ Not visible in CBS |
+| `TaggerTTL` | Time-to-live in days before deletion | `7` | ⚠️ Not visible in CBS |
+| `TaggerProject` | Project name (copied from CVM if attached) | `analytics` or `""` (empty) | ⚠️ Not visible in CBS |
+| `TaggerUsage` | Disk type | `SYSTEM` or `DATA` | ⚠️ Not visible in CBS |
+| `TaggerLinkedCVM` | Whether disk is attached to a CVM | `YES` or `NO` | ⚠️ Not visible in CBS |
+
+**Known Issue**: CBS disks do not honor Tag API tags. Function logs show successful tagging, and tags appear in Tag service, but CBS console and API show empty tags. Support ticket submitted to Tencent Cloud.
 
 ## Architecture
 
@@ -52,8 +91,11 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 **Note**: CloudAudit tracks are global by default - a single track monitors all regions automatically.
 
 ### Supported Events
-- `RunInstances` - CVM instances
-- `AllocateHosts` - CDH dedicated hosts
+- `RunInstances` - CVM instances ✅
+- `AllocateHosts` - CDH dedicated hosts ✅
+- `CreateLoadBalancer` - CLB load balancers ✅
+- `CreateCbsStorages` - CBS disk creation ⚠️ (Work in progress)
+- `AttachDisks` - CBS disk attachment to CVM ⚠️ (Work in progress)
 
 ## Prerequisites
 
@@ -177,11 +219,28 @@ Attach the following policies to your SCF execution role:
 
 The function automatically configures a global CloudAudit track:
 - **Single Global Track**: `tagger-global-track` monitors all regions automatically
-- **Event Filter**: `RunInstances` (CVM) and `AllocateHosts` (CDH) events
+- **Event Filter**: `RunInstances` (CVM), `AllocateHosts` (CDH), `CreateCbsStorages` (CBS), `AttachDisks` (CBS)
 - **Storage**: Delivers logs to the COS bucket specified in `COS_BUCKET`/`COS_REGION`
 - **API Region**: CloudAudit API calls are made via `ap-guangzhou` (Tencent Cloud requirement)
 
 **Note**: CloudAudit tracks are inherently global - one track automatically captures events from all Tencent Cloud regions.
+
+### CBS Tagging Strategy
+
+CBS disks are tagged using two strategies:
+
+#### 1. Attached Disks (DiskState = ATTACHED)
+- **Wait**: 10 minutes for CVM tags to propagate
+- **Copy Tags**: Extract `TaggerProject` from associated CVM (may be empty)
+- **Recreate Tags**: Generate `TaggerOwner`, `TaggerCreated`, `TaggerTTL` from audit event
+- **Add**: `TaggerUsage` (SYSTEM/DATA) and `TaggerLinkedCVM=YES`
+
+#### 2. Unattached Disks (DiskState = UNATTACHED)
+- **Wait**: 10 minutes (grace period for user to attach)
+- **Apply Defaults**: Use standard tags with empty `TaggerProject`
+- **Add**: `TaggerUsage` (SYSTEM/DATA) and `TaggerLinkedCVM=NO`
+
+**Re-attachment**: When a disk is re-attached to a different CVM, the `AttachDisks` event triggers and updates the `TaggerProject` tag from the new CVM.
 
 ## Usage
 
@@ -189,11 +248,13 @@ The function automatically configures a global CloudAudit track:
 
 Once deployed and configured, the function operates automatically:
 
-1. Create a new CVM instance or CDH host in any region
-2. CloudAudit captures the `RunInstances` or `AllocateHosts` event
+1. Create a new CVM instance, CDH host, or CBS disk in any region
+2. CloudAudit captures the creation event (`RunInstances`, `AllocateHosts`, `CreateCbsStorages`, or `AttachDisks`)
 3. Event is stored in COS bucket
 4. SCF function is triggered by new COS object
 5. Function processes the event and tags the resource
+   - **CVM/CDH**: Tagged immediately
+   - **CBS**: Tagged after 10-minute delay (ensures CVM tags are ready)
 
 ### Monitoring
 
@@ -273,6 +334,36 @@ scf-tagger/
 2. Create a feature branch
 3. Make your changes
 4. Submit a pull request
+
+### Adding New Service Types
+
+The architecture uses **separate CloudAudit tracks per service type**. To add support for a new service:
+
+1. **Add CloudAudit Track** (in `ensure_audit_track_to_cos()`):
+   ```python
+   # Example: Adding NAT Gateway support
+   nat_track_name = "tagger-nat-track"
+   nat_event_names = ["CreateNatGateway"]
+   # ... create track with ResourceType="vpc" ...
+   ```
+
+2. **Add Event Handler** (in `main_handler()`):
+   ```python
+   if event_name == "CreateNatGateway":
+       if handle_nat_tagging(rec):
+           tagged += 1
+       continue
+   ```
+
+3. **Implement Tagging Logic**:
+   ```python
+   def handle_nat_tagging(rec: Dict[str, Any]) -> bool:
+       # Extract NAT ID, region, build QCS
+       # Call tag_resource_qcs() with appropriate tags
+       pass
+   ```
+
+**Key Constraint**: CloudAudit requires `ResourceType` to be service-specific (e.g., `"cvm"`, `"clb"`, `"vpc"`). Wildcard `"*"` is not supported with EventNames.
 
 ## Security Considerations
 
