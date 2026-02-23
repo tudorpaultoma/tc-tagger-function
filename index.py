@@ -9,7 +9,7 @@ to COS and applies standardized tags to resources for better management and cost
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 1.6.0
+Version: 1.6.3
 License: Apache 2.0
 """
 
@@ -123,6 +123,9 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     Ensure CloudAudit tracks exist for monitoring resource creation events.
     Creates separate tracks per service type (CVM, CLB) delivering to COS.
     
+    Idempotent: Only creates/updates tracks if they don't exist or are misconfigured.
+    This prevents cascade loops where track deletion causes event re-delivery.
+    
     Architecture:
         - Track 1 (tagger-cvm-track): ResourceType="cvm" → RunInstances, AllocateHosts
         - Track 2 (tagger-clb-track): ResourceType="clb" → CreateLoadBalancer
@@ -181,12 +184,31 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         setattr(dreq, "PageSize", 50)
         dresp = client.DescribeAuditTracks(dreq)
         
-        # Create CVM/CDH track
+        # Check CVM/CDH track
         cvm_track_id = None
+        cvm_track_valid = False
         for tr in getattr(dresp, "Tracks", []) or []:
             if getattr(tr, "Name", "") == cvm_track_name:
                 cvm_track_id = getattr(tr, "TrackId", None)
-                print(json.dumps({"debug": "deleting_cvm_track", "track_id": cvm_track_id}))
+                track_status = getattr(tr, "Status", 0)
+                track_resource_type = getattr(tr, "ResourceType", "")
+                
+                # Check if track is valid (Status=1, ResourceType=cvm)
+                if track_status == 1 and track_resource_type == "cvm":
+                    print(json.dumps({
+                        "step": "cvm_track",
+                        "status": "exists",
+                        "track_id": cvm_track_id,
+                        "action": "skip_recreation"
+                    }))
+                    cvm_track_valid = True
+                break
+        
+        # Only create CVM track if it doesn't exist or is invalid
+        if not cvm_track_valid:
+            # Delete old track if it exists but is invalid
+            if cvm_track_id:
+                print(json.dumps({"debug": "deleting_invalid_cvm_track", "track_id": cvm_track_id}))
                 try:
                     delreq = audit_models.DeleteAuditTrackRequest()
                     setattr(delreq, "TrackId", cvm_track_id)
@@ -194,27 +216,45 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
                     print(json.dumps({"step": "cvm_track", "status": "deleted", "track_id": cvm_track_id}))
                 except Exception as del_err:
                     print(json.dumps({"warning": "delete_cvm_track_failed", "error": str(del_err)}))
-                break
+            
+            # Create new CVM track
+            print(json.dumps({"debug": "create_cvm_track_request", "resource_type": "cvm", "event_names": cvm_event_names}))
+            cvm_creq = audit_models.CreateAuditTrackRequest()
+            setattr(cvm_creq, "Name", cvm_track_name)
+            setattr(cvm_creq, "Status", 1)
+            setattr(cvm_creq, "ActionType", "Write")
+            setattr(cvm_creq, "ResourceType", "cvm")
+            setattr(cvm_creq, "EventNames", cvm_event_names)
+            setattr(cvm_creq, "Storage", storage)
+            cvm_cresp = client.CreateAuditTrack(cvm_creq)
+            cvm_track_id = getattr(cvm_cresp, "TrackId", None)
+            print(json.dumps({"step": "cvm_track", "status": "created", "track_id": cvm_track_id, "scope": "all_regions", "resource_type": "cvm", "events": cvm_event_names}))
         
-        # Create CVM track
-        print(json.dumps({"debug": "create_cvm_track_request", "resource_type": "cvm", "event_names": cvm_event_names}))
-        cvm_creq = audit_models.CreateAuditTrackRequest()
-        setattr(cvm_creq, "Name", cvm_track_name)
-        setattr(cvm_creq, "Status", 1)
-        setattr(cvm_creq, "ActionType", "Write")
-        setattr(cvm_creq, "ResourceType", "cvm")
-        setattr(cvm_creq, "EventNames", cvm_event_names)
-        setattr(cvm_creq, "Storage", storage)
-        cvm_cresp = client.CreateAuditTrack(cvm_creq)
-        cvm_track_id = getattr(cvm_cresp, "TrackId", None)
-        print(json.dumps({"step": "cvm_track", "status": "created", "track_id": cvm_track_id, "scope": "all_regions", "resource_type": "cvm", "events": cvm_event_names}))
-        
-        # Create CLB track
+        # Check CLB track
         clb_track_id = None
+        clb_track_valid = False
         for tr in getattr(dresp, "Tracks", []) or []:
             if getattr(tr, "Name", "") == clb_track_name:
                 clb_track_id = getattr(tr, "TrackId", None)
-                print(json.dumps({"debug": "deleting_clb_track", "track_id": clb_track_id}))
+                track_status = getattr(tr, "Status", 0)
+                track_resource_type = getattr(tr, "ResourceType", "")
+                
+                # Check if track is valid (Status=1, ResourceType=clb)
+                if track_status == 1 and track_resource_type == "clb":
+                    print(json.dumps({
+                        "step": "clb_track",
+                        "status": "exists",
+                        "track_id": clb_track_id,
+                        "action": "skip_recreation"
+                    }))
+                    clb_track_valid = True
+                break
+        
+        # Only create CLB track if needed
+        if not clb_track_valid:
+            # Delete old track if it exists but is invalid
+            if clb_track_id:
+                print(json.dumps({"debug": "deleting_invalid_clb_track", "track_id": clb_track_id}))
                 try:
                     delreq = audit_models.DeleteAuditTrackRequest()
                     setattr(delreq, "TrackId", clb_track_id)
@@ -222,20 +262,19 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
                     print(json.dumps({"step": "clb_track", "status": "deleted", "track_id": clb_track_id}))
                 except Exception as del_err:
                     print(json.dumps({"warning": "delete_clb_track_failed", "error": str(del_err)}))
-                break
-        
-        # Create CLB track
-        print(json.dumps({"debug": "create_clb_track_request", "resource_type": "clb", "event_names": clb_event_names}))
-        clb_creq = audit_models.CreateAuditTrackRequest()
-        setattr(clb_creq, "Name", clb_track_name)
-        setattr(clb_creq, "Status", 1)
-        setattr(clb_creq, "ActionType", "Write")
-        setattr(clb_creq, "ResourceType", "clb")
-        setattr(clb_creq, "EventNames", clb_event_names)
-        setattr(clb_creq, "Storage", storage)
-        clb_cresp = client.CreateAuditTrack(clb_creq)
-        clb_track_id = getattr(clb_cresp, "TrackId", None)
-        print(json.dumps({"step": "clb_track", "status": "created", "track_id": clb_track_id, "scope": "all_regions", "resource_type": "clb", "events": clb_event_names}))
+            
+            # Create new CLB track
+            print(json.dumps({"debug": "create_clb_track_request", "resource_type": "clb", "event_names": clb_event_names}))
+            clb_creq = audit_models.CreateAuditTrackRequest()
+            setattr(clb_creq, "Name", clb_track_name)
+            setattr(clb_creq, "Status", 1)
+            setattr(clb_creq, "ActionType", "Write")
+            setattr(clb_creq, "ResourceType", "clb")
+            setattr(clb_creq, "EventNames", clb_event_names)
+            setattr(clb_creq, "Storage", storage)
+            clb_cresp = client.CreateAuditTrack(clb_creq)
+            clb_track_id = getattr(clb_cresp, "TrackId", None)
+            print(json.dumps({"step": "clb_track", "status": "created", "track_id": clb_track_id, "scope": "all_regions", "resource_type": "clb", "events": clb_event_names}))
         
         # Return CVM track ID for backward compatibility
         return cvm_track_id
@@ -851,18 +890,26 @@ def extract_qcs(rec: Dict[str, Any]) -> Optional[str]:
     # Handle CVM RunInstances events
     evt = rec.get("eventName", "")
     if evt == "RunInstances":
-        # Try resourceSet first
+        # Try resourceSet first - but filter for actual instance (not keypair/sg/vpc/etc)
         resource_set = rec.get("resourceSet", [])
-        if resource_set and isinstance(resource_set[0], dict):
-            instance_id    = resource_set[0].get("resourceId")
-            resource_region= resource_set[0].get("resourceRegion")
-            user_id        = rec.get("userIdentity", {})
-            if isinstance(user_id, dict):
-                owner_uin = user_id.get("accountId") or user_id.get("principalId") or user_id.get("ownerUin") or ""
-            else:
-                owner_uin = ""
-            if instance_id and resource_region:
-                return f"qcs::cvm:{resource_region}:uin/{owner_uin}:instance/{instance_id}"
+        if resource_set:
+            # Find the actual CVM instance in resourceSet
+            for resource in resource_set:
+                if not isinstance(resource, dict):
+                    continue
+                resource_type_class = resource.get("resourceTypeClass", "")
+                # Look for QCS::CVM::Instance (the actual instance, not keypair/sg/etc)
+                if "Instance" in resource_type_class and "Keypair" not in resource_type_class:
+                    instance_id     = resource.get("resourceId")
+                    resource_region = resource.get("resourceRegion")
+                    user_id         = rec.get("userIdentity", {})
+                    if isinstance(user_id, dict):
+                        owner_uin = user_id.get("accountId") or user_id.get("principalId") or user_id.get("ownerUin") or ""
+                    else:
+                        owner_uin = ""
+                    if instance_id and resource_region:
+                        return f"qcs::cvm:{resource_region}:uin/{owner_uin}:instance/{instance_id}"
+                    break
 
         # Fallback: parse responseElements
         resp_str = rec.get("responseElements", "")
@@ -903,18 +950,26 @@ def extract_qcs(rec: Dict[str, Any]) -> Optional[str]:
 
     # Handle CDH AllocateHosts events
     if evt == "AllocateHosts":
-        # Try resourceSet first
+        # Try resourceSet first - filter for actual host
         resource_set = rec.get("resourceSet", [])
-        if resource_set and isinstance(resource_set[0], dict):
-            host_id         = resource_set[0].get("resourceId")
-            resource_region = resource_set[0].get("resourceRegion")
-            user_id         = rec.get("userIdentity", {})
-            if isinstance(user_id, dict):
-                owner_uin = user_id.get("accountId") or user_id.get("principalId") or user_id.get("ownerUin") or ""
-            else:
-                owner_uin = ""
-            if host_id and resource_region:
-                return f"qcs::cvm:{resource_region}:uin/{owner_uin}:host/{host_id}"
+        if resource_set:
+            # Find the actual CDH host in resourceSet
+            for resource in resource_set:
+                if not isinstance(resource, dict):
+                    continue
+                resource_type_class = resource.get("resourceTypeClass", "")
+                # Look for QCS::CVM::Host or similar (the actual host)
+                if "Host" in resource_type_class:
+                    host_id         = resource.get("resourceId")
+                    resource_region = resource.get("resourceRegion")
+                    user_id         = rec.get("userIdentity", {})
+                    if isinstance(user_id, dict):
+                        owner_uin = user_id.get("accountId") or user_id.get("principalId") or user_id.get("ownerUin") or ""
+                    else:
+                        owner_uin = ""
+                    if host_id and resource_region:
+                        return f"qcs::cvm:{resource_region}:uin/{owner_uin}:host/{host_id}"
+                    break
 
         # Fallback: parse responseElements
         resp_str = rec.get("responseElements", "")

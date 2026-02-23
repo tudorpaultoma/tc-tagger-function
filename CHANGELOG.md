@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.3] - 2026-02-23
+
+### Fixed
+- **Duplicate CloudAudit Tracks**: Resolved 3x duplicate tagging caused by multiple CVM tracks
+  - **Root Cause**: 3 separate CloudAudit tracks (`fra-tagger-track`, `tagger-global-track`, `tagger-cvm-track`) all monitoring CVM events
+  - Each track wrote same `RunInstances` event to COS → 3 files → 3 SCF invocations → 3 `TagResources` calls
+  - **Solution**: Manual cleanup of duplicate tracks, keep only `tagger-cvm-track` and `tagger-clb-track`
+  
+- **Resource Extraction Bug**: Fixed tagging wrong resources from `resourceSet`
+  - **Problem**: Function was blindly taking `resourceSet[0]` which could be keypair, security group, etc.
+  - **Example**: Created CVM but function tagged `skey-3i3pqclv` (keypair) instead of `ins-xxx` (instance)
+  - **Solution**: Filter `resourceSet` to find actual instance/host by `resourceTypeClass`
+  - CVM: Look for `"Instance"` in `resourceTypeClass` (exclude `"Keypair"`)
+  - CDH: Look for `"Host"` in `resourceTypeClass`
+
+### Changed
+- **Idempotent Track Management**: Only create/update tracks when necessary
+  - Check if track exists and is valid (Status=1, correct ResourceType)
+  - Skip deletion/recreation if track is already correctly configured
+  - Only delete track if it's misconfigured or disabled
+  - Logs `"action": "skip_recreation"` when track is valid
+
+- `extract_qcs()` now iterates through `resourceSet` to find correct resource type
+- Only processes resources matching expected type (Instance/Host), not related resources
+
+### Technical Details
+- CloudAudit duplicate tracks investigation:
+  - Old code (pre-v1.6.2) deleted/recreated tracks on every invocation → left orphaned tracks
+  - Multiple deployments created `fra-tagger-track`, `tagger-global-track`, `tagger-cvm-track`
+  - All 3 active tracks captured same events → multiplied event delivery by 3
+- CloudAudit `resourceSet` contains ALL resources involved in operation:
+  - `resourceSet[0]`: Could be keypair, security group, VPC, etc.
+  - `resourceSet[N]`: The actual instance/host is somewhere in the array
+- Previous logic: `resourceSet[0].resourceId` ❌
+- New logic: `for r in resourceSet if "Instance" in r.resourceTypeClass` ✅
+- Track validity: `Status=1` AND `ResourceType` matches (cvm/clb)
+
+### Impact
+- ✅ Eliminates 3x duplicate tagging (now only 1 TagResources event per resource)
+- ✅ Prevents CloudAudit track churn (no more constant delete/recreate)
+- ✅ Reduces CloudAudit noise and API quota usage
+- ✅ Stable track configuration across all invocations
+- ✅ Correct resource tagging (instances, not related resources)
+
 ## [1.5.1] - 2026-02-22
 
 ### Fixed
