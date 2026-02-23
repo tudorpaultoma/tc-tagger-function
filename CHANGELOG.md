@@ -107,7 +107,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **CloudAudit Multi-Region Architecture**: Corrected implementation to use single global CloudAudit track
   - Fixed `UnsupportedRegion` error when attempting region-specific track creation
-  - CloudAudit API calls now correctly use `ap-guangzhou` region (Tencent Cloud requirement)
+  - CloudAudit API calls use European region endpoint (configurable, defaults to eu-frankfurt)
   - Removed unnecessary `MONITORED_REGIONS` environment variable
   - Single track (`tagger-global-track`) now monitors all regions automatically
 
@@ -118,7 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Technical Details
 - CloudAudit tracks are inherently global and monitor all regions by default
-- CloudAudit API is only available in `ap-guangzhou` region
+- CloudAudit API configured to use European region endpoint (eu-frankfurt)
 - Cross-region log delivery to any COS bucket works automatically
 - Version bump from 1.2.0 to 1.3.0
 

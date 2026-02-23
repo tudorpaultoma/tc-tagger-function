@@ -221,7 +221,7 @@ The function automatically configures a global CloudAudit track:
 - **Single Global Track**: `tagger-global-track` monitors all regions automatically
 - **Event Filter**: `RunInstances` (CVM), `AllocateHosts` (CDH), `CreateCbsStorages` (CBS), `AttachDisks` (CBS)
 - **Storage**: Delivers logs to the COS bucket specified in `COS_BUCKET`/`COS_REGION`
-- **API Region**: CloudAudit API calls are made via `ap-guangzhou` (Tencent Cloud requirement)
+- **API Region**: CloudAudit API calls use European endpoint (configurable via `CLOUDAUDIT_REGION`, defaults to `eu-frankfurt`)
 
 **Note**: CloudAudit tracks are inherently global - one track automatically captures events from all Tencent Cloud regions.
 

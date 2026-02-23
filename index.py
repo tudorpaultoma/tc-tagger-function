@@ -9,7 +9,7 @@ to COS and applies standardized tags to resources for better management and cost
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 1.5.0
+Version: 1.6.0
 License: Apache 2.0
 """
 
@@ -147,9 +147,9 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         print(json.dumps({"step": "audit_track", "error": "missing bucket_region or bucket"}))
         return None
 
-    # CloudAudit API is only available in ap-guangzhou
+    # CloudAudit API region - using European endpoint
     # CloudAudit tracks automatically monitor ALL regions globally
-    CLOUDAUDIT_API_REGION = "ap-guangzhou"
+    CLOUDAUDIT_API_REGION = "eu-frankfurt"
     client = make_tc_client("cloudaudit", cloudaudit_client.CloudauditClient, CLOUDAUDIT_API_REGION)
     if client is None:
         print(json.dumps({"step": "audit_track", "error": "no SDK credentials available", "api_region": CLOUDAUDIT_API_REGION}))
@@ -247,7 +247,7 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
             "error": str(e),
             "traceback": tb
         }))
-    return track_id
+        return None
 
 
 def ensure_audit_tracks_all_regions(bucket_region: str, bucket: str) -> Dict[str, Optional[str]]:
@@ -667,30 +667,41 @@ def handle_clb_tagging(rec: Dict[str, Any]) -> bool:
     if event_name != "CreateLoadBalancer":
         return False
     
-    print(json.dumps({
-        "debug": "clb_event_structure",
-        "has_resourceSet": "resourceSet" in rec,
-        "has_responseElements": "responseElements" in rec,
-        "region_extracted": extract_region(rec)
-    }))
-    
     # Extract LB ID and region
     lb_id = None
-    region = extract_region(rec)
+    region = None
     
     # Try resourceSet first (console events)
     resource_set = rec.get("resourceSet", [])
     if resource_set and isinstance(resource_set, list) and len(resource_set) > 0:
         first_resource = resource_set[0]
         if isinstance(first_resource, dict):
-            lb_id = first_resource.get("resourceId")
-            if not region:
-                region = first_resource.get("resourceRegion")
-            print(json.dumps({
-                "debug": "clb_extracted_from_resourceSet",
-                "lb_id": lb_id,
-                "region": region
-            }))
+            lb_id_raw = first_resource.get("resourceId")
+            # Handle case where resourceId is a string like "['lb-xxx']"
+            if lb_id_raw and isinstance(lb_id_raw, str):
+                # Try to parse as JSON array
+                if lb_id_raw.startswith("[") and lb_id_raw.endswith("]"):
+                    try:
+                        # Replace single quotes with double quotes for valid JSON
+                        lb_id_json = lb_id_raw.replace("'", '"')
+                        lb_ids_list = json.loads(lb_id_json)
+                        if lb_ids_list and isinstance(lb_ids_list, list):
+                            lb_id = lb_ids_list[0]
+                        else:
+                            lb_id = lb_id_raw
+                    except Exception:
+                        # If parsing fails, use as-is
+                        lb_id = lb_id_raw
+                else:
+                    lb_id = lb_id_raw
+            else:
+                lb_id = lb_id_raw
+            # Always prefer resourceRegion from resourceSet
+            region = first_resource.get("resourceRegion")
+    
+    # Fallback to extract_region if resourceSet didn't provide region
+    if not region:
+        region = extract_region(rec)
     
     # Fallback: parse responseElements for LoadBalancerIds
     if not lb_id:
@@ -701,13 +712,9 @@ def handle_clb_tagging(rec: Dict[str, Any]) -> bool:
                 lb_ids = resp.get("LoadBalancerIds", [])
                 if lb_ids:
                     lb_id = lb_ids[0]
-                    print(json.dumps({
-                        "debug": "clb_extracted_from_responseElements",
-                        "lb_id": lb_id
-                    }))
             except Exception as e:
                 print(json.dumps({
-                    "debug": "clb_responseElements_parse_failed",
+                    "warning": "clb_responseElements_parse_failed",
                     "error": str(e)
                 }))
     
@@ -1106,20 +1113,16 @@ def main_handler(event, context):
                 if "cloudaudit" in rec.get("eventSource", "").lower():
                     continue
                 
-                # Debug: Log event name
                 event_name = rec.get("eventName", "")
-                print(json.dumps({"debug": "processing_event", "eventName": event_name}))
                 
                 # Handle CLB events
                 if event_name == "CreateLoadBalancer":
-                    print(json.dumps({"debug": "clb_event_detected", "eventName": event_name}))
                     if handle_clb_tagging(rec):
                         tagged += 1
                     continue
                 
                 # Handle CBS events
                 if event_name in ("CreateCbsStorages", "AttachDisks"):
-                    print(json.dumps({"debug": "cbs_event_detected", "eventName": event_name}))
                     if handle_cbs_tagging(rec):
                         tagged += 1
                     continue

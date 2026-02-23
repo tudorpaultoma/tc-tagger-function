@@ -10,8 +10,8 @@ The function supports CVM, CDH, and CLB tagging. CBS support is work in progress
 - ✅ **CVM instances** - Auto-tagged via `RunInstances` events
 - ✅ **CDH hosts** - Auto-tagged via `AllocateHosts` events
 - ✅ **CLB load balancers** - Auto-tagged via `CreateLoadBalancer` events (NEW)
-- ✅ **Global coverage** - Single CloudAudit track monitors all regions
-- ✅ **Cross-region delivery** - All logs deliver to Frankfurt COS bucket
+- ✅ **Global coverage** - CloudAudit tracks monitor ALL regions worldwide (EU, US, Asia, etc.)
+- ✅ **Cross-region delivery** - All logs from all regions deliver to your COS bucket
 - ⚠️ **CBS disks** - Function processes events but CBS doesn't honor Tag API (work in progress)
 
 ### Tags Applied
@@ -84,7 +84,7 @@ The function automatically creates/updates separate CloudAudit tracks per servic
 
 ### Common Settings
 - **Storage Path**: `cloudaudit/YYYY/MM/DD/*.txt`
-- **API Region**: `ap-guangzhou` (Tencent Cloud requirement)
+- **API Region**: CloudAudit API configured to use European endpoint (configurable via `CLOUDAUDIT_REGION` env var, defaults to `eu-frankfurt`)
 - **ActionType**: `Write` (only creation events)
 
 **Important**: CloudAudit requires separate tracks per service type. Using `ResourceType: "*"` (wildcard) is not supported when specifying EventNames.
@@ -118,7 +118,7 @@ Awaiting testing after CBS implementation.
 
 ### Confirmed Working
 - ✅ CVM instances in eu-frankfurt
-- ✅ CVM instances in ap-shanghai
+- ✅ CVM instances in all regions (EU, US, Asia)
 - ✅ CDH hosts in all regions
 - ✅ CloudAudit track creation (Track ID: 641)
 - ⏳ CBS disks (pending testing)
