@@ -9,7 +9,7 @@ to COS and applies standardized tags to resources for better management and cost
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 1.6.3
+Version: 1.6.4
 License: Apache 2.0
 """
 
@@ -121,7 +121,7 @@ def ensure_cos_bucket(bucket: str, region: str) -> bool:
 def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     """
     Ensure CloudAudit tracks exist for monitoring resource creation events.
-    Creates separate tracks per service type (CVM, CLB) delivering to COS.
+    Creates separate tracks per service type (CVM, CLB, CBS) delivering to COS.
     
     Idempotent: Only creates/updates tracks if they don't exist or are misconfigured.
     This prevents cascade loops where track deletion causes event re-delivery.
@@ -129,7 +129,8 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     Architecture:
         - Track 1 (tagger-cvm-track): ResourceType="cvm" → RunInstances, AllocateHosts
         - Track 2 (tagger-clb-track): ResourceType="clb" → CreateLoadBalancer
-        - Both tracks deliver to same COS bucket → single SCF function processes all events
+        - Track 3 (tagger-cbs-track): ResourceType="cbs" → CreateDisks, AttachDisks
+        - All tracks deliver to same COS bucket → single SCF function processes all events
     
     Important:
         CloudAudit API does NOT support ResourceType="*" (wildcard) with EventNames.
@@ -165,6 +166,10 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     # Track 2: CLB
     clb_track_name = "tagger-clb-track"
     clb_event_names = ["CreateLoadBalancer"]
+    
+    # Track 3: CBS
+    cbs_track_name = "tagger-cbs-track"
+    cbs_event_names = ["CreateCbsStorages", "AttachDisks"]
     
     # Prepare storage config
     storage = audit_models.Storage()
@@ -275,6 +280,52 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
             clb_cresp = client.CreateAuditTrack(clb_creq)
             clb_track_id = getattr(clb_cresp, "TrackId", None)
             print(json.dumps({"step": "clb_track", "status": "created", "track_id": clb_track_id, "scope": "all_regions", "resource_type": "clb", "events": clb_event_names}))
+        
+        # Check CBS track
+        cbs_track_id = None
+        cbs_track_valid = False
+        for tr in getattr(dresp, "Tracks", []) or []:
+            if getattr(tr, "Name", "") == cbs_track_name:
+                cbs_track_id = getattr(tr, "TrackId", None)
+                track_status = getattr(tr, "Status", 0)
+                track_resource_type = getattr(tr, "ResourceType", "")
+                
+                # Check if track is valid (Status=1, ResourceType=cbs)
+                if track_status == 1 and track_resource_type == "cbs":
+                    print(json.dumps({
+                        "step": "cbs_track",
+                        "status": "exists",
+                        "track_id": cbs_track_id,
+                        "action": "skip_recreation"
+                    }))
+                    cbs_track_valid = True
+                break
+        
+        # Only create CBS track if needed
+        if not cbs_track_valid:
+            # Delete old track if it exists but is invalid
+            if cbs_track_id:
+                print(json.dumps({"debug": "deleting_invalid_cbs_track", "track_id": cbs_track_id}))
+                try:
+                    delreq = audit_models.DeleteAuditTrackRequest()
+                    setattr(delreq, "TrackId", cbs_track_id)
+                    client.DeleteAuditTrack(delreq)
+                    print(json.dumps({"step": "cbs_track", "status": "deleted", "track_id": cbs_track_id}))
+                except Exception as del_err:
+                    print(json.dumps({"warning": "delete_cbs_track_failed", "error": str(del_err)}))
+            
+            # Create new CBS track
+            print(json.dumps({"debug": "create_cbs_track_request", "resource_type": "cbs", "event_names": cbs_event_names}))
+            cbs_creq = audit_models.CreateAuditTrackRequest()
+            setattr(cbs_creq, "Name", cbs_track_name)
+            setattr(cbs_creq, "Status", 1)
+            setattr(cbs_creq, "ActionType", "Write")
+            setattr(cbs_creq, "ResourceType", "cbs")
+            setattr(cbs_creq, "EventNames", cbs_event_names)
+            setattr(cbs_creq, "Storage", storage)
+            cbs_cresp = client.CreateAuditTrack(cbs_creq)
+            cbs_track_id = getattr(cbs_cresp, "TrackId", None)
+            print(json.dumps({"step": "cbs_track", "status": "created", "track_id": cbs_track_id, "scope": "all_regions", "resource_type": "cbs", "events": cbs_event_names}))
         
         # Return CVM track ID for backward compatibility
         return cvm_track_id

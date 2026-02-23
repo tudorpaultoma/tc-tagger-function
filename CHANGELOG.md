@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.4] - 2026-02-23
+
+### Added
+- **CBS Track Support**: Added CloudAudit track for CBS disk tagging
+  - Track 3 (`tagger-cbs-track`): ResourceType=`cbs` → `CreateDisks`, `AttachDisks`
+  - Enables automatic CBS disk tagging via CloudAudit event delivery
+
+### Fixed
+- **CBS Event Name**: Corrected event name from `CreateCbsStorages` to `CreateDisks`
+  - CloudAudit uses `CreateDisks` for CBS disk creation, not `CreateCbsStorages`
+  - Function now properly handles CBS events
+
+### Changed
+- Updated architecture to 3-track system: CVM, CLB, CBS
+- Function now creates CBS track automatically on first invocation
+
 ## [1.6.3] - 2026-02-23
 
 ### Fixed
