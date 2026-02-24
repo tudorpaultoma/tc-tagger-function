@@ -417,11 +417,70 @@ def build_cbs_tags(owner: str, disk_usage: str, linked_cvm: bool, cvm_project: s
         {"TagKey": "TaggerOwner",     "TagValue": owner or "unknown"},
         {"TagKey": "TaggerCreated",   "TagValue": today},
         {"TagKey": "TaggerTTL",       "TagValue": "7"},
-        {"TagKey": "TaggerProject",   "TagValue": cvm_project or ""},
+        {"TagKey": "TaggerProject",   "TagValue": cvm_project or "n/a"},
         {"TagKey": "TaggerUsage",     "TagValue": disk_usage.upper()},
         {"TagKey": "TaggerLinkedCVM", "TagValue": "YES" if linked_cvm else "NO"},
     ]
     return tags
+
+
+def find_recent_disk(region: str, event_time: int, window_seconds: int = 300) -> Optional[str]:
+    """
+    Find most recently created disk in region within time window.
+    Used when CloudAudit event has empty resourceSet (console-created disks).
+    
+    Args:
+        region: Region to search
+        event_time: CloudAudit event timestamp (unix epoch)
+        window_seconds: Time window in seconds (default 300 = 5 minutes)
+    
+    Returns:
+        Disk ID of most recent disk, or None
+    """
+    client = make_tc_client("cbs", cbs_client.CbsClient, region)
+    if not client:
+        return None
+    
+    try:
+        req = cbs_models.DescribeDisksRequest()
+        req.Limit = 20  # Check last 20 disks
+        resp = client.DescribeDisks(req)
+        
+        disks = getattr(resp, "DiskSet", [])
+        if not disks:
+            return None
+        
+        # Find disk created within time window
+        import datetime
+        event_dt = datetime.datetime.fromtimestamp(event_time)
+        
+        for disk in disks:
+            create_time_str = getattr(disk, "CreateTime", "")
+            if not create_time_str:
+                continue
+            
+            try:
+                # Parse CBS CreateTime format: "2026-02-23 12:34:56"
+                create_dt = datetime.datetime.strptime(create_time_str, "%Y-%m-%d %H:%M:%S")
+                time_diff = abs((create_dt - event_dt).total_seconds())
+                
+                if time_diff <= window_seconds:
+                    disk_id = getattr(disk, "DiskId", "")
+                    print(json.dumps({
+                        "debug": "found_matching_disk",
+                        "disk_id": disk_id,
+                        "create_time": create_time_str,
+                        "event_time": event_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        "time_diff_seconds": int(time_diff)
+                    }))
+                    return disk_id
+            except Exception as parse_err:
+                continue
+        
+        return None
+    except Exception as e:
+        print(json.dumps({"error": "find_recent_disk_failed", "region": region, "message": str(e)}))
+        return None
 
 
 def get_disk_info(disk_id: str, region: str) -> Optional[Dict[str, Any]]:
@@ -610,14 +669,29 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
             "keys": list(req_params.keys()) if isinstance(req_params, dict) else []
         }))
         
-        # API-created disks don't have disk ID in the event yet
-        # We need to wait for the responseElements to be populated
-        print(json.dumps({
-            "info": "cbs_event_incomplete",
-            "reason": "disk_id_not_yet_available",
-            "note": "API-created disks may not have ID in initial event"
-        }))
-        return False
+        # Console-created disks: resourceSet empty initially, query CBS for recent disks
+        if region:
+            print(json.dumps({
+                "info": "cbs_querying_recent_disks",
+                "reason": "resourceSet_empty_on_console_creation",
+                "region": region
+            }))
+            disk_id = find_recent_disk(region, rec.get("eventTime", 0))
+            if disk_id:
+                print(json.dumps({"info": "found_recent_disk", "disk_id": disk_id}))
+            else:
+                print(json.dumps({
+                    "warning": "no_recent_disk_found",
+                    "note": "disk may not be created yet, will skip tagging"
+                }))
+                return False
+        else:
+            print(json.dumps({
+                "info": "cbs_event_incomplete",
+                "reason": "disk_id_not_yet_available",
+                "note": "Cannot query CBS without region"
+            }))
+            return False
     
     if not disk_id or not region:
         print(json.dumps({
@@ -693,8 +767,9 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
         "extracted_uin": owner_uin
     }))
     
-    # Build QCS for CBS disk - use full format with UIN (same as CVM)
-    qcs = f"qcs::cbs:{region}:uin/{owner_uin}:disk/{disk_id}"
+    # Build QCS for CBS disk - CBS uses cvm service type with volume prefix
+    # Format: qcs::cvm:region:uin/xxx:volume/disk-xxx
+    qcs = f"qcs::cvm:{region}:uin/{owner_uin}:volume/{disk_id}"
     
     # Log tags being applied
     print(json.dumps({

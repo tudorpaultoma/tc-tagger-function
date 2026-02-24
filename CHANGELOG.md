@@ -5,21 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.6.4] - 2026-02-23
-
-### Added
-- **CBS Track Support**: Added CloudAudit track for CBS disk tagging
-  - Track 3 (`tagger-cbs-track`): ResourceType=`cbs` → `CreateDisks`, `AttachDisks`
-  - Enables automatic CBS disk tagging via CloudAudit event delivery
+## [1.6.4] - 2026-02-24
 
 ### Fixed
-- **CBS Event Name**: Corrected event name from `CreateCbsStorages` to `CreateDisks`
-  - CloudAudit uses `CreateDisks` for CBS disk creation, not `CreateCbsStorages`
-  - Function now properly handles CBS events
+- **CBS Event Tracking**: Added CBS events to CVM track
+  - CloudAudit classifies CBS events (`CreateCbsStorages`, `AttachDisks`) as `ResourceType="cvm"`, not `"cbs"`
+  - Added CBS event names to existing `tagger-cvm-track`
+  - No separate CBS track needed
+
+- **Track Validation Bug**: Fixed idempotent track check to validate EventNames
+  - Previous validation only checked Status and ResourceType
+  - Tracks with outdated EventNames were marked as "valid" and not updated
+  - Now validates EventNames match expected configuration
+  - Ensures tracks are recreated when event list changes
+
+- **CBS Empty Tag Values**: Fixed empty `TaggerProject` value causing CBS tagging failure
+  - CBS API requires all tag values to be non-empty strings
+  - Changed empty project from `""` to `"n/a"` for unattached/untagged disks
+  - Resolves CBS tag visibility issue reported by Tencent support
+
+- **CBS Console Creation Timing**: Fixed missing disk ID in console-created CBS events
+  - CloudAudit event arrives before CBS assigns disk ID (empty `resourceSet`)
+  - Added `find_recent_disk()` to query CBS for disks created within 5-minute window
+  - Matches disk by creation timestamp proximity to CloudAudit event
+
+- **CBS QCS Format**: Fixed incorrect QCS format preventing tags from being applied
+  - CBS disks use `qcs::cvm:region:uin/xxx:volume/disk-id` format (not `qcs::cbs:...`)
+  - CBS resources are part of CVM service in Tag API
+  - Resource prefix is `volume`, not `disk`
+  - Tags now successfully applied to CBS disks
 
 ### Changed
-- Updated architecture to 3-track system: CVM, CLB, CBS
-- Function now creates CBS track automatically on first invocation
+- CVM track now monitors: `RunInstances`, `AllocateHosts`, `CreateCbsStorages`, `AttachDisks`
+- Architecture remains 2-track system: CVM (includes CBS), CLB
+- Track validation: Status=1 AND ResourceType match AND EventNames match
+- CBS tags always have non-empty values
 
 ## [1.6.3] - 2026-02-23
 
