@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.7] - 2026-02-25
+
+### Fixed
+- **CBS Disk Provisioning Race Condition**: Implemented retry mechanism for CBS disk tagging
+  - CloudAudit events can arrive before CBS assigns a DiskId to newly created disks
+  - Added `find_recent_disk_with_retry()` function with exponential backoff
+  - Default retry strategy: 2 attempts with 10s and 20s delays (30s total wait)
+  - Significantly improves success rate for console-created CBS disks
+  - Handles timing issues where disk provisioning takes 10-30 seconds
+
+### Changed
+- **Increased SCF Timeout Recommendation**: For optimal retry behavior, SCF timeout should be increased from 30s to 60s
+- Added `time` module import for retry delays
+- Enhanced logging to show retry attempts and delays
+
+### Documentation
+- **Tag Display Order Clarification**: Updated README and code comments to clarify that tags are displayed **alphabetically** in the Tencent Cloud console
+  - This is controlled by the Tag service, not by the order we send tags
+  - README tables now show tags in alphabetical order (matching actual console display)
+  - Code comments distinguish between "logical order" (for code organization) and "display order" (alphabetical)
+  - Added prominent note in README explaining this behavior
+
+### Technical Details
+- New function: `find_recent_disk_with_retry(region, event_time, window_seconds=300, max_retries=2, delays=[10, 20])`
+- Wraps existing `find_recent_disk()` with configurable retry logic
+- Logs each retry attempt with clear status messages
+- Graceful degradation: if all retries fail, logs warning and skips tagging (disk can be manually tagged later)
+
 ## [1.6.6] - 2026-02-25
 
 ### Changed

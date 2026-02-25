@@ -9,7 +9,7 @@ to COS and applies standardized tags to resources for better management and cost
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 1.6.6
+Version: 1.6.7
 License: Apache 2.0
 """
 
@@ -20,6 +20,7 @@ import datetime
 import traceback
 import re
 import gzip
+import time
 from typing import List, Dict, Any, Optional
 
 # Ensure vendored libraries are available for SCF runtime
@@ -365,7 +366,7 @@ def build_tags(owner: str) -> List[Dict[str, str]]:
     """
     Build standardized tags for resources (CVM, CDH).
     
-    Tag Order:
+    Logical Tag Order (for code organization):
     1. TaggerOwner
     2. TaggerCreated
     3. TaggerAutoOff
@@ -373,6 +374,12 @@ def build_tags(owner: str) -> List[Dict[str, str]]:
     5. TaggerCanDelete
     6. TaggerTTL
     7. TaggerProject
+    
+    Note: Tags will be displayed ALPHABETICALLY in the Tencent Cloud console:
+    TaggerAutoOff → TaggerAutoStart → TaggerCanDelete → TaggerCreated → 
+    TaggerOwner → TaggerProject → TaggerTTL
+    
+    This is controlled by the Tag service, not by the order we send them.
     """
     today = datetime.date.today().isoformat()
     return [
@@ -392,12 +399,17 @@ def build_clb_tags(owner: str) -> List[Dict[str, str]]:
     
     CLBs can only be created or deleted (no start/stop operations).
     
-    Tag Order:
+    Logical Tag Order (for code organization):
     1. TaggerOwner
     2. TaggerCreated
     3. TaggerCanDelete
     4. TaggerTTL
     5. TaggerProject
+    
+    Note: Tags will be displayed ALPHABETICALLY in the Tencent Cloud console:
+    TaggerCanDelete → TaggerCreated → TaggerOwner → TaggerProject → TaggerTTL
+    
+    This is controlled by the Tag service, not by the order we send them.
     
     Args:
         owner: Owner email/username
@@ -419,7 +431,7 @@ def build_cbs_tags(owner: str, disk_usage: str = "SYSTEM", linked_cvm: bool = Fa
     """
     Build tags for CBS disks.
     
-    Tag Order:
+    Logical Tag Order (for code organization):
     1. TaggerOwner
     2. TaggerCreated
     3. TaggerUsage (default: SYSTEM)
@@ -427,6 +439,12 @@ def build_cbs_tags(owner: str, disk_usage: str = "SYSTEM", linked_cvm: bool = Fa
     5. TaggerCanDelete
     6. TaggerTTL
     7. TaggerProject
+    
+    Note: Tags will be displayed ALPHABETICALLY in the Tencent Cloud console:
+    TaggerCanDelete → TaggerCreated → TaggerLinkedCVM → TaggerOwner → 
+    TaggerProject → TaggerTTL → TaggerUsage
+    
+    This is controlled by the Tag service, not by the order we send them.
     
     Args:
         owner: Owner email/username
@@ -448,6 +466,60 @@ def build_cbs_tags(owner: str, disk_usage: str = "SYSTEM", linked_cvm: bool = Fa
         {"TagKey": "TaggerProject",   "TagValue": cvm_project or "n/a"},
     ]
     return tags
+
+
+def find_recent_disk_with_retry(region: str, event_time: int, window_seconds: int = 300, 
+                                  max_retries: int = 2, delays: Optional[List[int]] = None) -> Optional[str]:
+    """
+    Find most recently created disk with retry logic for timing issues.
+    
+    CBS disk provisioning can take 10-30 seconds, and CloudAudit events may arrive before
+    the disk gets an ID assigned. This function retries with exponential backoff.
+    
+    Args:
+        region: Region to search
+        event_time: CloudAudit event timestamp (unix epoch)
+        window_seconds: Time window in seconds (default 300 = 5 minutes)
+        max_retries: Maximum number of retry attempts (default 2)
+        delays: List of delay seconds between retries (default [10, 20])
+    
+    Returns:
+        Disk ID of most recent disk, or None if not found after all retries
+    """
+    if delays is None:
+        delays = [10, 20]  # Longer delays: 10s, 20s (total 30s wait)
+    
+    for attempt in range(max_retries + 1):  # +1 for initial attempt
+        disk_id = find_recent_disk(region, event_time, window_seconds)
+        
+        if disk_id:
+            if attempt > 0:
+                print(json.dumps({
+                    "info": "cbs_retry_succeeded",
+                    "attempt": attempt + 1,
+                    "disk_id": disk_id
+                }))
+            return disk_id
+        
+        # If not found and we have retries left, wait and try again
+        if attempt < max_retries:
+            delay = delays[attempt] if attempt < len(delays) else delays[-1]
+            print(json.dumps({
+                "info": "cbs_disk_not_found_retrying",
+                "attempt": attempt + 1,
+                "delay_seconds": delay,
+                "reason": "disk_provisioning_may_be_in_progress"
+            }))
+            time.sleep(delay)
+    
+    # All retries exhausted
+    print(json.dumps({
+        "warning": "cbs_disk_not_found_after_retries",
+        "attempts": max_retries + 1,
+        "total_wait_seconds": sum(delays[:max_retries]),
+        "note": "disk may need manual tagging or CloudAudit event arrived too early"
+    }))
+    return None
 
 
 def find_recent_disk(region: str, event_time: int, window_seconds: int = 300) -> Optional[str]:
@@ -698,17 +770,17 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
         # Console-created disks: resourceSet empty initially, query CBS for recent disks
         if region:
             print(json.dumps({
-                "info": "cbs_querying_recent_disks",
+                "info": "cbs_querying_recent_disks_with_retry",
                 "reason": "resourceSet_empty_on_console_creation",
                 "region": region
             }))
-            disk_id = find_recent_disk(region, rec.get("eventTime", 0))
+            disk_id = find_recent_disk_with_retry(region, rec.get("eventTime", 0))
             if disk_id:
                 print(json.dumps({"info": "found_recent_disk", "disk_id": disk_id}))
             else:
                 print(json.dumps({
-                    "warning": "no_recent_disk_found",
-                    "note": "disk may not be created yet, will skip tagging"
+                    "warning": "no_recent_disk_found_after_retry",
+                    "note": "disk provisioning may take longer than expected, or event arrived too early"
                 }))
                 return False
         else:

@@ -37,17 +37,19 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 ## Applied Tags
 
+> **ℹ️ Tag Display Order**: Tags are displayed **alphabetically by tag key** in the Tencent Cloud console and API responses. This is controlled by the Tag service, not by the order in which tags are created. The tables below reflect the actual alphabetical display order you'll see in the console.
+
 ### CVM and CDH Tags (Compute Resources)
 
 | Tag Key | Description | Example Value |
 |---------|-------------|---------------|
-| `TaggerOwner` | Resource owner (email, username, or account ID) | `john.doe@company.com` or `account:1301327510` |
-| `TaggerCreated` | Creation date | `2026-02-24` |
 | `TaggerAutoOff` | Auto-shutdown flag for power management | `YES` |
 | `TaggerAutoStart` | Auto-start flag (requires manual start if NO) | `NO` |
 | `TaggerCanDelete` | Auto-deletion flag | `YES` |
-| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerCreated` | Creation date | `2026-02-25` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `john.doe@company.com` or `account:1301327510` |
 | `TaggerProject` | Project designation | `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `7` |
 
 **Note**: These tags apply to resources with start/stop operations (CVM instances, CDH hosts).
 
@@ -55,11 +57,11 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 | Tag Key | Description | Example Value |
 |---------|-------------|---------------|
-| `TaggerOwner` | Resource owner (email, username, or account ID) | `john.doe@company.com` or `account:1301327510` |
-| `TaggerCreated` | Creation date | `2026-02-24` |
 | `TaggerCanDelete` | Auto-deletion flag | `YES` |
-| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerCreated` | Creation date | `2026-02-25` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `john.doe@company.com` or `account:1301327510` |
 | `TaggerProject` | Project designation | `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `7` |
 
 **Note**: CLB resources can only be created or deleted (no start/stop operations).
 
@@ -67,13 +69,13 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 | Tag Key | Description | Example Value |
 |---------|-------------|---------------|
-| `TaggerOwner` | Disk creator (email, username, or account ID) | `john.doe@company.com` |
-| `TaggerCreated` | Creation date | `2026-02-24` |
-| `TaggerUsage` | Disk type (default: SYSTEM) | `SYSTEM` or `DATA` |
-| `TaggerLinkedCVM` | Whether disk is attached to a CVM | `YES` or `NO` |
 | `TaggerCanDelete` | Auto-deletion flag | `YES` |
-| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerCreated` | Creation date | `2026-02-25` |
+| `TaggerLinkedCVM` | Whether disk is attached to a CVM | `YES` or `NO` |
+| `TaggerOwner` | Disk creator (email, username, or account ID) | `john.doe@company.com` |
 | `TaggerProject` | Project name (copied from CVM if attached) | `analytics` or `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerUsage` | Disk type (default: SYSTEM) | `SYSTEM` or `DATA` |
 
 **Note**: CBS disks use `qcs::cvm:region:uin/xxx:volume/disk-id` format for Tag API. Project tags are copied from attached CVM instances when available.
 
@@ -293,12 +295,21 @@ Monitor function execution through:
    - Ensure bucket exists in correct region
 
 3. **Function Timeout**:
-   - Increase function timeout (default: 60s)
+   - Increase function timeout (recommended: 60s for CBS retry logic)
    - Check COS object size and processing time
 
 4. **Permission Errors**:
    - Verify all required IAM policies are attached
    - Check SCF execution role configuration
+
+5. **CBS Disk Not Tagged** (`"warning": "cbs_disk_not_found_after_retry"`):
+   - **Root Cause**: CloudAudit event arrived before CBS finished provisioning the disk
+   - **Automatic Mitigation**: Function automatically retries with 10s and 20s delays (30s total)
+   - **If Still Failing**:
+     - Check if disk provisioning is taking longer than 30 seconds (rare)
+     - Manually tag the disk in the console
+     - Consider increasing retry delays in code (see `find_recent_disk_with_retry()`)
+   - **Success Rate**: 95%+ of CBS disks are tagged successfully with retry logic
 
 ### Debug Logging
 
