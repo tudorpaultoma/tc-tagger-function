@@ -9,7 +9,7 @@ to COS and applies standardized tags to resources for better management and cost
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 1.6.4
+Version: 1.6.6
 License: Apache 2.0
 """
 
@@ -363,7 +363,16 @@ def ensure_audit_tracks_all_regions(bucket_region: str, bucket: str) -> Dict[str
 
 def build_tags(owner: str) -> List[Dict[str, str]]:
     """
-    Build standardized tags for resources.
+    Build standardized tags for resources (CVM, CDH).
+    
+    Tag Order:
+    1. TaggerOwner
+    2. TaggerCreated
+    3. TaggerAutoOff
+    4. TaggerAutoStart
+    5. TaggerCanDelete
+    6. TaggerTTL
+    7. TaggerProject
     """
     today = datetime.date.today().isoformat()
     return [
@@ -371,6 +380,7 @@ def build_tags(owner: str) -> List[Dict[str, str]]:
         {"TagKey": "TaggerCreated",   "TagValue": today},
         {"TagKey": "TaggerAutoOff",   "TagValue": "YES"},
         {"TagKey": "TaggerAutoStart", "TagValue": "NO"},
+        {"TagKey": "TaggerCanDelete", "TagValue": "YES"},
         {"TagKey": "TaggerTTL",       "TagValue": "7"},
         {"TagKey": "TaggerProject",   "TagValue": "n/a"},
     ]
@@ -380,8 +390,14 @@ def build_clb_tags(owner: str) -> List[Dict[str, str]]:
     """
     Build tags for CLB (Cloud Load Balancer) resources.
     
-    CLBs can only be created or deleted (no start/stop operations),
-    so we use TaggerDelete instead of TaggerAutoOff/TaggerAutoStart.
+    CLBs can only be created or deleted (no start/stop operations).
+    
+    Tag Order:
+    1. TaggerOwner
+    2. TaggerCreated
+    3. TaggerCanDelete
+    4. TaggerTTL
+    5. TaggerProject
     
     Args:
         owner: Owner email/username
@@ -391,22 +407,31 @@ def build_clb_tags(owner: str) -> List[Dict[str, str]]:
     """
     today = datetime.date.today().isoformat()
     return [
-        {"TagKey": "TaggerOwner",   "TagValue": owner or "unknown"},
-        {"TagKey": "TaggerCreated", "TagValue": today},
-        {"TagKey": "TaggerTTL",     "TagValue": "7"},
-        {"TagKey": "TaggerDelete",  "TagValue": "YES"},
-        {"TagKey": "TaggerProject", "TagValue": "n/a"},
+        {"TagKey": "TaggerOwner",     "TagValue": owner or "unknown"},
+        {"TagKey": "TaggerCreated",   "TagValue": today},
+        {"TagKey": "TaggerCanDelete", "TagValue": "YES"},
+        {"TagKey": "TaggerTTL",       "TagValue": "7"},
+        {"TagKey": "TaggerProject",   "TagValue": "n/a"},
     ]
 
 
-def build_cbs_tags(owner: str, disk_usage: str, linked_cvm: bool, cvm_project: str = "") -> List[Dict[str, str]]:
+def build_cbs_tags(owner: str, disk_usage: str = "SYSTEM", linked_cvm: bool = False, cvm_project: str = "") -> List[Dict[str, str]]:
     """
     Build tags for CBS disks.
     
+    Tag Order:
+    1. TaggerOwner
+    2. TaggerCreated
+    3. TaggerUsage (default: SYSTEM)
+    4. TaggerLinkedCVM
+    5. TaggerCanDelete
+    6. TaggerTTL
+    7. TaggerProject
+    
     Args:
         owner: Owner email/username
-        disk_usage: SYSTEM or DATA (from CBS DiskUsage field)
-        linked_cvm: True if disk is attached to a CVM
+        disk_usage: SYSTEM or DATA (from CBS DiskUsage field, default: SYSTEM)
+        linked_cvm: True if disk is attached to a CVM (default: False)
         cvm_project: Project name from CVM (may be empty)
     
     Returns:
@@ -416,10 +441,11 @@ def build_cbs_tags(owner: str, disk_usage: str, linked_cvm: bool, cvm_project: s
     tags = [
         {"TagKey": "TaggerOwner",     "TagValue": owner or "unknown"},
         {"TagKey": "TaggerCreated",   "TagValue": today},
-        {"TagKey": "TaggerTTL",       "TagValue": "7"},
-        {"TagKey": "TaggerProject",   "TagValue": cvm_project or "n/a"},
         {"TagKey": "TaggerUsage",     "TagValue": disk_usage.upper()},
         {"TagKey": "TaggerLinkedCVM", "TagValue": "YES" if linked_cvm else "NO"},
+        {"TagKey": "TaggerCanDelete", "TagValue": "YES"},
+        {"TagKey": "TaggerTTL",       "TagValue": "7"},
+        {"TagKey": "TaggerProject",   "TagValue": cvm_project or "n/a"},
     ]
     return tags
 

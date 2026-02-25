@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.6] - 2026-02-25
+
+### Changed
+- **Tag Order Standardization**: Enforced consistent tag ordering across all resource types
+  - **CVM/CDH**: TaggerOwner, TaggerCreated, TaggerAutoOff, TaggerAutoStart, TaggerCanDelete, TaggerTTL, TaggerProject
+  - **CLB**: TaggerOwner, TaggerCreated, TaggerCanDelete, TaggerTTL, TaggerProject
+  - **CBS**: TaggerOwner, TaggerCreated, TaggerUsage, TaggerLinkedCVM, TaggerCanDelete, TaggerTTL, TaggerProject
+  - Ensures predictable tag ordering in console and API responses
+
+- **CBS TaggerUsage Default**: Changed default value from DATA to SYSTEM
+  - New parameter signature: `disk_usage: str = "SYSTEM"`
+  - Reflects common use case where CBS disks are primarily system disks
+  - DATA disks still tagged correctly when detected from CBS API
+
+### Documentation
+- Updated README tag tables to reflect correct ordering
+- Added inline documentation in tag builder functions showing tag order
+- Updated version to 1.6.6
+
+## [1.6.5] - 2026-02-24
+
+### Added
+- **TaggerCanDelete Tag**: Added `TaggerCanDelete` tag to all resources (CVM, CDH, CLB, CBS)
+  - Standardized deletion flag across all resource types
+  - Default value: `YES`
+  - Replaces CLB's `TaggerDelete` for consistency
+
+### Changed
+- **CLB Tags**: Renamed `TaggerDelete` to `TaggerCanDelete` for naming consistency
+- **Documentation**: Updated README to reflect CBS full support and latest tag schema
+  - Removed "Work in Progress" status from CBS
+  - Updated all tag tables with `TaggerCanDelete`
+  - Fixed CloudAudit configuration section (2-track system)
+  - Updated CBS tagging strategy (removed delays, added console creation handling)
+
 ## [1.6.4] - 2026-02-24
 
 ### Fixed
