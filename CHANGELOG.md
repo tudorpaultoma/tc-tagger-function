@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-02-25
+
+### Fixed
+- **Region Extraction Bug**: `extract_region()` was returning `eventRegion` (CloudAudit processing region, e.g. `ap-chongqing`) instead of the actual resource region (`eu-frankfurt`). Now prioritizes `resourceRegion` from `resourceSet`, which is the correct region for API calls
+  - This was the root cause of CBS disk queries returning empty results — the DescribeDisks API was querying the wrong region
+
+### Changed
+- **CVM Disk Tagging — State-Aware Polling**: Replaced blind retry delays with CVM state polling
+  - New function `wait_for_cvm_running()` polls `DescribeInstances` until instance is `RUNNING` (10s intervals, 120s max)
+  - Disks are attached and queryable once CVM reaches `RUNNING` state
+  - Eliminates guesswork on timing; previous fixed delays (60s) were insufficient
+  - Added CVM SDK import (`tencentcloud.cvm.v20170312`)
+- **Version bump**: 1.7.1 → 1.8.0
+
+### IAM Requirements
+- New permission needed: `cvm:DescribeInstances` (for CVM state polling)
+
+## [1.7.1] - 2026-02-25
+
+### Fixed
+- **IAM Policy**: Fixed `cbs:DescribeDisks` → `cvm:DescribeDisks` in README (CBS disks are under the `cvm` service namespace)
+- **CVM Disk Retry Timing**: Increased retry delays from `[5, 10]` (15s) to `[10, 20, 30]` (60s) with 4 total attempts
+  - Disk provisioning can take longer than 15s; previous delays were insufficient
+
+## [1.7.0] - 2026-02-25
+
+### Added
+- **CVM System Disk Auto-Tagging**: When a CVM instance is created via `RunInstances`, all attached CBS disks (system and data) are now automatically tagged
+  - System disks created alongside CVM instances do not generate separate `CreateCbsStorages` CloudAudit events
+  - After tagging the CVM, the function now queries CBS API for disks attached to the instance
+  - Each disk is tagged with CBS-specific tags (`TaggerUsage`, `TaggerLinkedCVM=YES`, etc.)
+  - Includes retry logic (10s, 20s, 30s delays) for disk provisioning timing
+- New function: `tag_cvm_attached_disks(instance_id, region, owner, owner_uin)`
+  - Queries `DescribeDisks` with `instance-id` filter
+  - Tags each disk found with correct `DiskUsage` (SYSTEM or DATA)
+  - Graceful error handling per disk (one failure doesn't block others)
+
+### Changed
+- **Version bump**: 1.6.7 → 1.7.0 (minor version bump for new feature)
+- `main_handler` now includes CVM disk tagging step after CVM instance tagging
+- Instance ID extraction from `resourceSet` or `responseElements` for disk lookup
+
 ## [1.6.7] - 2026-02-25
 
 ### Fixed

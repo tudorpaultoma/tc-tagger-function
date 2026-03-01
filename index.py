@@ -9,7 +9,7 @@ to COS and applies standardized tags to resources for better management and cost
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 1.6.7
+Version: 1.8.0
 License: Apache 2.0
 """
 
@@ -42,6 +42,7 @@ from tencentcloud.common import credential
 from tencentcloud.tag.v20180813 import tag_client, models as tag_models
 from tencentcloud.cloudaudit.v20190319 import cloudaudit_client, models as audit_models
 from tencentcloud.cbs.v20170312 import cbs_client, models as cbs_models
+from tencentcloud.cvm.v20170312 import cvm_client as tc_cvm_client, models as cvm_models
 
 # Configuration from environment variables
 COS_BUCKET       = os.getenv("COS_BUCKET")
@@ -912,6 +913,185 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
         return False
 
 
+def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, poll_interval: int = 10) -> bool:
+    """
+    Poll CVM DescribeInstances until the instance reaches RUNNING state.
+    
+    Args:
+        instance_id: CVM instance ID
+        region: Resource region
+        max_wait: Maximum seconds to wait (default 120s)
+        poll_interval: Seconds between polls (default 10s)
+    
+    Returns:
+        True if instance reached RUNNING state, False if timed out or error
+    """
+    elapsed = 0
+    while elapsed < max_wait:
+        try:
+            client = make_tc_client("cvm", tc_cvm_client.CvmClient, region)
+            if not client:
+                print(json.dumps({"error": "cvm_state_check_no_client", "region": region}))
+                return False
+            
+            req = cvm_models.DescribeInstancesRequest()
+            req.InstanceIds = [instance_id]
+            resp = client.DescribeInstances(req)
+            
+            instances = getattr(resp, "InstanceSet", [])
+            if instances:
+                state = getattr(instances[0], "InstanceState", "")
+                print(json.dumps({
+                    "info": "cvm_state_check",
+                    "instance_id": instance_id,
+                    "state": state,
+                    "elapsed_seconds": elapsed
+                }))
+                if state == "RUNNING":
+                    return True
+                if state in ("STOPPED", "SHUTDOWN", "TERMINATING", "TERMINATED"):
+                    print(json.dumps({
+                        "warning": "cvm_unexpected_state",
+                        "instance_id": instance_id,
+                        "state": state
+                    }))
+                    return False
+            else:
+                print(json.dumps({
+                    "info": "cvm_state_check_not_found_yet",
+                    "instance_id": instance_id,
+                    "elapsed_seconds": elapsed
+                }))
+        except Exception as e:
+            print(json.dumps({
+                "error": "cvm_state_check_failed",
+                "instance_id": instance_id,
+                "elapsed_seconds": elapsed,
+                "message": str(e)
+            }))
+        
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+    
+    print(json.dumps({
+        "warning": "cvm_state_check_timeout",
+        "instance_id": instance_id,
+        "max_wait": max_wait
+    }))
+    return False
+
+
+def tag_cvm_attached_disks(instance_id: str, region: str, owner: str, owner_uin: str) -> int:
+    """
+    Find and tag all CBS disks attached to a CVM instance.
+    
+    Called after CVM tagging on RunInstances events. When a CVM is created,
+    its system disk (and any data disks) are provisioned automatically but
+    no separate CreateCbsStorages CloudAudit event is fired. This function
+    waits for the CVM to reach RUNNING state (disks are attached by then),
+    then queries CBS for disks and tags them.
+    
+    Args:
+        instance_id: CVM instance ID (e.g. ins-pzkqhljc)
+        region: Resource region (e.g. eu-frankfurt)
+        owner: Owner email/username for TaggerOwner tag
+        owner_uin: Account UIN for QCS string
+    
+    Returns:
+        Number of disks successfully tagged
+    """
+    # Wait for CVM to be RUNNING — disks are attached and queryable at that point
+    if not wait_for_cvm_running(instance_id, region):
+        print(json.dumps({
+            "warning": "cvm_disk_tagging_skipped",
+            "instance_id": instance_id,
+            "reason": "cvm_not_running_after_timeout"
+        }))
+        return 0
+    
+    # Query CBS for disks attached to this instance
+    try:
+        client = make_tc_client("cbs", cbs_client.CbsClient, region)
+        if not client:
+            print(json.dumps({"error": "cvm_disk_tagging_no_cbs_client", "region": region}))
+            return 0
+        
+        req = cbs_models.DescribeDisksRequest()
+        req.Filters = [{"Name": "instance-id", "Values": [instance_id]}]
+        resp = client.DescribeDisks(req)
+        
+        disks = getattr(resp, "DiskSet", [])
+        
+        if not disks:
+            print(json.dumps({
+                "warning": "cvm_disk_query_no_disks",
+                "instance_id": instance_id,
+                "note": "CVM is RUNNING but no disks found"
+            }))
+            return 0
+        
+        print(json.dumps({
+            "info": "cvm_disk_query_success",
+            "instance_id": instance_id,
+            "disks_found": len(disks)
+        }))
+    except Exception as e:
+        print(json.dumps({
+            "error": "cvm_disk_query_failed",
+            "instance_id": instance_id,
+            "region": region,
+            "message": str(e)
+        }))
+        return 0
+    
+    # Tag each disk found
+    disks_tagged = 0
+    for disk in disks:
+        disk_id = getattr(disk, "DiskId", "")
+        disk_usage = getattr(disk, "DiskUsage", "SYSTEM_DISK")
+        
+        if not disk_id:
+            continue
+        
+        tags = build_cbs_tags(
+            owner=owner,
+            disk_usage=parse_disk_usage(disk_usage),
+            linked_cvm=True,
+            cvm_project=""  # CVM just created, TaggerProject is "n/a"
+        )
+        
+        qcs = f"qcs::cvm:{region}:uin/{owner_uin}:volume/{disk_id}"
+        
+        try:
+            tag_resource_qcs(region, qcs, tags)
+            disks_tagged += 1
+            print(json.dumps({
+                "success": "cvm_attached_disk_tagged",
+                "instance_id": instance_id,
+                "disk_id": disk_id,
+                "disk_usage": parse_disk_usage(disk_usage),
+                "qcs": qcs
+            }))
+        except Exception as e:
+            print(json.dumps({
+                "error": "cvm_attached_disk_tagging_failed",
+                "instance_id": instance_id,
+                "disk_id": disk_id,
+                "qcs": qcs,
+                "message": str(e)
+            }))
+    
+    if disks_tagged > 0:
+        print(json.dumps({
+            "info": "cvm_attached_disks_tagged_summary",
+            "instance_id": instance_id,
+            "disks_tagged": disks_tagged,
+            "total_disks": len(disks)
+        }))
+    
+    return disks_tagged
+
+
 def handle_clb_tagging(rec: Dict[str, Any]) -> bool:
     """
     Handle CLB (Cloud Load Balancer) tagging for CreateLoadBalancer events.
@@ -1083,7 +1263,21 @@ def tag_resource_qcs(region: str, qcs: str, tags: List[Dict[str, str]]) -> None:
 def extract_region(rec: Dict[str, Any]) -> Optional[str]:
     """
     Extract region information from a CloudAudit record.
+    
+    Priority:
+    1. resourceRegion from resourceSet (most accurate for the actual resource)
+    2. Top-level region / requestRegion fields
+    3. eventRegion (CloudAudit processing region — often differs from resource region)
     """
+    # Best source: resourceRegion from resourceSet
+    resource_set = rec.get("resourceSet", [])
+    if isinstance(resource_set, list):
+        for resource in resource_set:
+            if isinstance(resource, dict):
+                rr = resource.get("resourceRegion")
+                if rr:
+                    return rr
+
     return rec.get("region") or rec.get("requestRegion") or rec.get("eventRegion")
 
 
@@ -1418,6 +1612,44 @@ def main_handler(event, context):
                     try:
                         tag_resource_qcs(res_region, qcs, build_tags(owner))
                         tagged += 1
+                        
+                        # Tag CBS disks attached to this CVM (system disk + any data disks)
+                        # These disks don't generate separate CreateCbsStorages events
+                        if rec.get("eventName") == "RunInstances":
+                            # Extract instance_id from resourceSet or QCS
+                            instance_id = None
+                            resource_set = rec.get("resourceSet", [])
+                            if resource_set and isinstance(resource_set, list):
+                                for resource in resource_set:
+                                    if isinstance(resource, dict) and "Instance" in resource.get("resourceTypeClass", ""):
+                                        instance_id = resource.get("resourceId")
+                                        break
+                            
+                            # Fallback: extract from responseElements
+                            if not instance_id:
+                                resp_str = rec.get("responseElements", "")
+                                if resp_str and "InstanceIdSet" in resp_str:
+                                    try:
+                                        resp_data = json.loads(resp_str)
+                                        ids = resp_data.get("InstanceIdSet", [])
+                                        if ids:
+                                            instance_id = ids[0]
+                                    except Exception:
+                                        pass
+                            
+                            if instance_id:
+                                owner_uin = extract_account_uin(rec)
+                                try:
+                                    disks_tagged = tag_cvm_attached_disks(instance_id, res_region, owner, owner_uin)
+                                    tagged += disks_tagged
+                                except Exception as de:
+                                    print(json.dumps({
+                                        "error": "cvm_disk_tagging_failed",
+                                        "instance_id": instance_id,
+                                        "region": res_region,
+                                        "message": str(de)
+                                    }))
+                        
                     except Exception as te:
                         print(json.dumps({"error": "tagging_failed", "qcs": qcs, "region": res_region, "message": str(te)}))
                         errors.append({"err": str(te), "qcs": qcs, "region": res_region})

@@ -10,6 +10,7 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 ### 🖥️ **CVM (Cloud Virtual Machine)** ✅
 - **Instances** - `RunInstances` events
+- **System Disk Auto-Tagging**: Automatically tags CBS system disks created with the CVM instance
 
 ### 🏢 **CDH (Cloud Dedicated Host)** ✅
 - **Dedicated Hosts** - `AllocateHosts` events
@@ -20,8 +21,9 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 ### 💾 **CBS (Cloud Block Storage)** ✅
 - **Disks** - `CreateCbsStorages` and `AttachDisks` events
+- **CVM System Disks**: Automatically tagged when CVM is created (no separate CBS event needed)
 - **Full Support**: Automatic tagging with proper QCS format
-- **Console Creation**: Handles timing delays for console-created disks
+- **Console Creation**: Handles timing delays with retry logic for console-created disks
 - **Smart Tagging**: Copies project tags from attached CVM instances
 
 ## Features
@@ -77,26 +79,30 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 | `TaggerTTL` | Time-to-live in days before deletion | `7` |
 | `TaggerUsage` | Disk type (default: SYSTEM) | `SYSTEM` or `DATA` |
 
-**Note**: CBS disks use `qcs::cvm:region:uin/xxx:volume/disk-id` format for Tag API. Project tags are copied from attached CVM instances when available.
+**Note**: CBS disks use `qcs::cvm:region:uin/xxx:volume/disk-id` format for Tag API. CBS disks are tagged via two paths:
+1. **CVM System/Data Disks**: Automatically tagged when a CVM is created (`RunInstances` event) — no separate CBS event needed
+2. **Standalone Disks**: Tagged via `CreateCbsStorages` or `AttachDisks` events with retry logic for provisioning delays
 
 ## Architecture
 
 ```
 CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
+                                                  ↳ Tag CVM Attached Disks
 ```
 
 1. **CloudAudit** captures resource creation events from all regions globally
 2. **COS** stores audit logs in structured format  
 3. **SCF** processes new log files via COS triggers
 4. **Tag API** applies standardized tags to resources
+5. **CBS API** queries disks attached to CVM instances for automatic disk tagging
 
 **Note**: CloudAudit tracks are global by default - a single track monitors all regions automatically.
 
 ### Supported Events
-- `RunInstances` - CVM instances ✅
+- `RunInstances` - CVM instances + attached CBS disks (system & data) ✅
 - `AllocateHosts` - CDH dedicated hosts ✅
 - `CreateLoadBalancer` - CLB load balancers ✅
-- `CreateCbsStorages` - CBS disk creation ✅
+- `CreateCbsStorages` - CBS standalone disk creation ✅
 - `AttachDisks` - CBS disk attachment to CVM ✅
 
 ## Prerequisites
@@ -133,7 +139,7 @@ zip -r scf-tagger.zip index.py package/
    - Runtime: Python 3.9
    - Handler: `index.main_handler`
    - Memory: 512MB
-   - Timeout: 60s
+   - Timeout: 150s
 
 2. **Upload Code**: Upload the `scf-tagger.zip` file
 
@@ -200,6 +206,23 @@ Attach the following policies to your SCF execution role:
     {
       "effect": "allow",
       "action": ["tag:TagResources"],
+      "resource": ["*"]
+    }
+  ]
+}
+```
+
+#### CVM/CBS Disk Policy (Required for CVM disk auto-tagging)
+
+> **Note**: Both CBS disk queries and CVM instance queries use the `cvm` service namespace in Tencent Cloud IAM.
+
+```json
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": ["cvm:DescribeDisks", "cvm:DescribeInstances"],
       "resource": ["*"]
     }
   ]
@@ -295,7 +318,7 @@ Monitor function execution through:
    - Ensure bucket exists in correct region
 
 3. **Function Timeout**:
-   - Increase function timeout (recommended: 60s for CBS retry logic)
+   - Increase function timeout (recommended: 150s for CVM state polling + CBS disk tagging)
    - Check COS object size and processing time
 
 4. **Permission Errors**:
