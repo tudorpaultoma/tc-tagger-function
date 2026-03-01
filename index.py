@@ -9,7 +9,7 @@ to COS and applies standardized tags to resources for better management and cost
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 1.8.0
+Version: 1.8.1
 License: Apache 2.0
 """
 
@@ -913,7 +913,7 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
         return False
 
 
-def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, poll_interval: int = 10) -> bool:
+def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, poll_interval: int = 10) -> str:
     """
     Poll CVM DescribeInstances until the instance reaches RUNNING state.
     
@@ -924,7 +924,10 @@ def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, pol
         poll_interval: Seconds between polls (default 10s)
     
     Returns:
-        True if instance reached RUNNING state, False if timed out or error
+        "running" if instance reached RUNNING state
+        "unauthorized" if DescribeInstances permission is missing
+        "timeout" if timed out waiting
+        "error" for unexpected terminal states
     """
     elapsed = 0
     while elapsed < max_wait:
@@ -932,7 +935,7 @@ def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, pol
             client = make_tc_client("cvm", tc_cvm_client.CvmClient, region)
             if not client:
                 print(json.dumps({"error": "cvm_state_check_no_client", "region": region}))
-                return False
+                return "error"
             
             req = cvm_models.DescribeInstancesRequest()
             req.InstanceIds = [instance_id]
@@ -948,14 +951,14 @@ def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, pol
                     "elapsed_seconds": elapsed
                 }))
                 if state == "RUNNING":
-                    return True
+                    return "running"
                 if state in ("STOPPED", "SHUTDOWN", "TERMINATING", "TERMINATED"):
                     print(json.dumps({
                         "warning": "cvm_unexpected_state",
                         "instance_id": instance_id,
                         "state": state
                     }))
-                    return False
+                    return "error"
             else:
                 print(json.dumps({
                     "info": "cvm_state_check_not_found_yet",
@@ -963,11 +966,21 @@ def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, pol
                     "elapsed_seconds": elapsed
                 }))
         except Exception as e:
+            err_msg = str(e)
+            # Detect permission error immediately — no point retrying
+            if "UnauthorizedOperation" in err_msg or "not authorized" in err_msg:
+                print(json.dumps({
+                    "warning": "cvm_state_check_unauthorized",
+                    "instance_id": instance_id,
+                    "region": region,
+                    "message": err_msg
+                }))
+                return "unauthorized"
             print(json.dumps({
                 "error": "cvm_state_check_failed",
                 "instance_id": instance_id,
                 "elapsed_seconds": elapsed,
-                "message": str(e)
+                "message": err_msg
             }))
         
         time.sleep(poll_interval)
@@ -978,7 +991,7 @@ def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, pol
         "instance_id": instance_id,
         "max_wait": max_wait
     }))
-    return False
+    return "timeout"
 
 
 def tag_cvm_attached_disks(instance_id: str, region: str, owner: str, owner_uin: str) -> int:
@@ -991,6 +1004,9 @@ def tag_cvm_attached_disks(instance_id: str, region: str, owner: str, owner_uin:
     waits for the CVM to reach RUNNING state (disks are attached by then),
     then queries CBS for disks and tags them.
     
+    If DescribeInstances permission is unavailable, falls back to a timed
+    delay with retries for the disk query.
+    
     Args:
         instance_id: CVM instance ID (e.g. ins-pzkqhljc)
         region: Resource region (e.g. eu-frankfurt)
@@ -1000,8 +1016,28 @@ def tag_cvm_attached_disks(instance_id: str, region: str, owner: str, owner_uin:
     Returns:
         Number of disks successfully tagged
     """
-    # Wait for CVM to be RUNNING — disks are attached and queryable at that point
-    if not wait_for_cvm_running(instance_id, region):
+    # Try CVM state polling first
+    cvm_status = wait_for_cvm_running(instance_id, region)
+    
+    if cvm_status == "error":
+        print(json.dumps({
+            "warning": "cvm_disk_tagging_skipped",
+            "instance_id": instance_id,
+            "reason": "cvm_in_terminal_state"
+        }))
+        return 0
+    
+    if cvm_status == "unauthorized":
+        # Fallback: no DescribeInstances permission, use timed delay + retries
+        print(json.dumps({
+            "info": "cvm_disk_tagging_fallback",
+            "instance_id": instance_id,
+            "reason": "no_DescribeInstances_permission",
+            "note": "Falling back to timed delay for disk query"
+        }))
+        return _query_and_tag_disks_with_retries(instance_id, region, owner, owner_uin)
+    
+    if cvm_status == "timeout":
         print(json.dumps({
             "warning": "cvm_disk_tagging_skipped",
             "instance_id": instance_id,
@@ -1009,7 +1045,49 @@ def tag_cvm_attached_disks(instance_id: str, region: str, owner: str, owner_uin:
         }))
         return 0
     
-    # Query CBS for disks attached to this instance
+    # CVM is RUNNING — query disks directly (should be available immediately)
+    return _query_and_tag_disks(instance_id, region, owner, owner_uin)
+
+
+def _query_and_tag_disks_with_retries(instance_id: str, region: str, owner: str, owner_uin: str) -> int:
+    """
+    Fallback: query CBS disks with timed delays when CVM state polling is unavailable.
+    Uses delays [30, 30, 30] (90s total) to allow time for CVM provisioning.
+    """
+    delays = [30, 30, 30]
+    
+    for attempt in range(len(delays) + 1):
+        if attempt > 0:
+            delay = delays[attempt - 1]
+            print(json.dumps({
+                "info": "cvm_disk_query_retrying",
+                "instance_id": instance_id,
+                "attempt": attempt + 1,
+                "delay_seconds": delay,
+                "reason": "no_disks_found_yet"
+            }))
+            time.sleep(delay)
+        
+        result = _query_and_tag_disks(instance_id, region, owner, owner_uin)
+        if result > 0:
+            return result
+        
+        # Check if the query itself failed (not just empty) — logged inside _query_and_tag_disks
+    
+    print(json.dumps({
+        "warning": "cvm_disk_query_no_disks_after_retries",
+        "instance_id": instance_id,
+        "attempts": len(delays) + 1,
+        "total_wait_seconds": sum(delays)
+    }))
+    return 0
+
+
+def _query_and_tag_disks(instance_id: str, region: str, owner: str, owner_uin: str) -> int:
+    """
+    Query CBS for disks attached to an instance and tag them.
+    Returns number of disks tagged (0 if none found or error).
+    """
     try:
         client = make_tc_client("cbs", cbs_client.CbsClient, region)
         if not client:
@@ -1023,11 +1101,6 @@ def tag_cvm_attached_disks(instance_id: str, region: str, owner: str, owner_uin:
         disks = getattr(resp, "DiskSet", [])
         
         if not disks:
-            print(json.dumps({
-                "warning": "cvm_disk_query_no_disks",
-                "instance_id": instance_id,
-                "note": "CVM is RUNNING but no disks found"
-            }))
             return 0
         
         print(json.dumps({

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-02-25
+
+### Fixed
+- **CVM State Polling Resilience**: `wait_for_cvm_running()` now detects `UnauthorizedOperation` immediately instead of retrying for 120s
+  - Falls back to timed delay + disk query retries (30s intervals, 90s total) when `cvm:DescribeInstances` permission is missing
+  - Prevents wasting entire SCF execution time on permission errors
+- **Refactored disk query**: Extracted `_query_and_tag_disks()` and `_query_and_tag_disks_with_retries()` for reuse across both paths
+
 ## [1.8.0] - 2026-02-25
 
 ### Fixed
