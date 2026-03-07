@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.2] - 2026-03-07
+
+### Changed
+- **Cleaned up verbose debug logging**: Removed excessive `debug` logs (event structure dumps, raw responseElements, requestParameters keys, resourceSet content, user identity with sensitive tokens). Logs now show only actionable info: resource found, tagging success/failure, warnings, and errors.
+- **Removed `user_identity_for_qcs` log** that was leaking session tokens and secret keys.
+- **Removed CBS tag verification step** — the extra `DescribeDisks` call after tagging added latency without value; tag API errors are already caught.
+- **Removed per-poll CVM state logging** — only logs on terminal states, unauthorized, or timeout.
+- **Credentials log** now only emits on failure (missing creds), not on every client creation.
+
+## [1.9.1] - 2026-03-03
+
+### Fixed
+- **Prepaid CBS disk tagging failing**: Monthly subscription (prepaid) disks have empty `resourceSet` and `responseElements` in CloudAudit events — the disk ID isn't available until provisioning completes. Increased retry delays from 30s total (10+20) to 100s total (10+20+30+40) with 4 retries to handle longer prepaid provisioning times.
+
+### Improved
+- **`find_recent_disk` now sorts by creation time DESC** (`Order=DESC`, `OrderField=CREATE_TIME`) — ensures newest disks are checked first instead of relying on default API order.
+- **Skips already-tagged disks** — `find_recent_disk` now checks for `TaggerOwner` tag and skips disks that were already tagged, avoiding false matches with previously created disks.
+
+## [1.9.0] - 2026-03-03
+
+### Fixed
+- **CBS track creation was failing silently**: CloudAudit `CreateAuditTrack` API rejected specific event names like `CreateDisks` for `ResourceType="cbs"`, causing the entire track creation function to fail (all 3 tracks inside one try/except). This explains why tracks weren't being recreated after manual deletion.
+
+### Changed
+- **CBS track now uses `EventNames: ["*"]` (wildcard)**: Instead of specifying individual event names that CloudAudit may not recognize, the CBS track now captures ALL CBS write events. This ensures `CreateDisks`, `CreateCbsStorages`, `AttachDisks`, and any other CBS write events are delivered to COS.
+- **Reverted CVM track**: Removed `CreateDisks` from CVM track (was added in v1.8.4). CVM track is back to `["RunInstances", "AllocateHosts"]`.
+- **Track creation is now individually error-handled**: Refactored from one giant try/except to per-track error handling via `_ensure_track()` helper. A failure creating one track (e.g. CBS) no longer prevents creation of others (CVM, CLB).
+- **Better logging**: Track list and per-track creation errors are now individually logged with full tracebacks.
+
+## [1.8.4] - 2026-03-03
+
+### Fixed
+- **`CreateDisks` may be classified under `cvm` ResourceType by CloudAudit**: The event's `resources` field uses `qcs::cvm:...volume/*`, suggesting CloudAudit may route `CreateDisks` under the `cvm` resource type rather than `cbs`. Added `CreateDisks` to the CVM track event names as well (`["RunInstances", "AllocateHosts", "CreateDisks"]`) to ensure the event is captured regardless of CloudAudit's internal classification. Kept in CBS track too for redundancy.
+
+## [1.8.3] - 2026-03-01
+
+### Fixed
+- **CloudAudit track not updated with new EventNames**: Track validation only checked `Status` and `ResourceType` but NOT `EventNames`. The old CBS track (`CreateCbsStorages`, `AttachDisks`) passed validation even though `CreateDisks` was missing, so `CreateDisks` events were never delivered to COS
+  - Track validation now compares sorted `EventNames` against desired list; mismatches trigger delete + recreate
+  - Applied same fix to CVM and CLB track validation for future-proofing
+
+## [1.8.2] - 2026-03-01
+
+### Fixed
+- **Missing `CreateDisks` event handling**: Pay-as-you-go CBS disks created standalone (not via `RunInstances`) fire a `CreateDisks` CloudAudit event, not `CreateCbsStorages`. Added `CreateDisks` to:
+  - CloudAudit track event names (`tagger-cbs-track`)
+  - `handle_cbs_tagging()` accepted event names
+  - `main_handler()` event dispatch
+- **`resourceId` parsing for `CreateDisks`**: The `resourceId` field arrives as `"['disk-xxx']"` (Python list repr as string). Added robust parsing that handles this format, JSON arrays, and plain disk IDs with regex fallback
+
 ## [1.8.1] - 2026-02-25
 
 ### Fixed

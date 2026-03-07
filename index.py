@@ -9,7 +9,7 @@ to COS and applies standardized tags to resources for better management and cost
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 1.8.1
+Version: 1.9.2
 License: Apache 2.0
 """
 
@@ -82,9 +82,8 @@ def make_tc_client(service_key: str, client_cls, region: str):
 
     cred = _build_cred()
     if not cred:
-        print(json.dumps({"step": "tc_sdk_creds", "present": False}))
+        print(json.dumps({"error": "tc_sdk_creds_missing", "service": service_key, "region": region}))
         return None
-    print(json.dumps({"step": "tc_sdk_creds", "present": True}))
     return client_cls(cred, region, client_profile)
 
 
@@ -131,13 +130,15 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     Architecture:
         - Track 1 (tagger-cvm-track): ResourceType="cvm" → RunInstances, AllocateHosts
         - Track 2 (tagger-clb-track): ResourceType="clb" → CreateLoadBalancer
-        - Track 3 (tagger-cbs-track): ResourceType="cbs" → CreateDisks, AttachDisks
+        - Track 3 (tagger-cbs-track): ResourceType="cbs" → ["*"] (all CBS write events)
         - All tracks deliver to same COS bucket → single SCF function processes all events
     
     Important:
-        CloudAudit API does NOT support ResourceType="*" (wildcard) with EventNames.
+        CloudAudit API does NOT support ResourceType="*" (wildcard) with specific EventNames.
         Each service type requires a dedicated track with specific ResourceType.
-        This architectural decision ensures reliable event delivery.
+        CBS track uses EventNames=["*"] because CloudAudit may not recognize specific
+        event names like "CreateDisks" for the CBS service, causing silent creation failure.
+        Each track creation is individually error-handled so one failure doesn't block others.
     
     Note: 
         CloudAudit tracks are global and automatically monitor all regions.
@@ -169,9 +170,12 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     clb_track_name = "tagger-clb-track"
     clb_event_names = ["CreateLoadBalancer"]
     
-    # Track 3: CBS
+    # Track 3: CBS — use ["*"] to capture ALL CBS write events
+    # CloudAudit may not recognize specific event names like "CreateDisks" for
+    # ResourceType="cbs", causing track creation to fail silently.
+    # Using wildcard ensures we capture CreateDisks/CreateCbsStorages/AttachDisks etc.
     cbs_track_name = "tagger-cbs-track"
-    cbs_event_names = ["CreateCbsStorages", "AttachDisks"]
+    cbs_event_names = ["*"]
     
     # Prepare storage config
     storage = audit_models.Storage()
@@ -185,161 +189,78 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     setattr(storage, "StoragePrefix", prefix_base[:40])
 
     try:
-        # List existing tracks
         dreq = audit_models.DescribeAuditTracksRequest()
         setattr(dreq, "PageNumber", 1)
         setattr(dreq, "PageSize", 50)
         dresp = client.DescribeAuditTracks(dreq)
-        
-        # Check CVM/CDH track
-        cvm_track_id = None
-        cvm_track_valid = False
-        for tr in getattr(dresp, "Tracks", []) or []:
-            if getattr(tr, "Name", "") == cvm_track_name:
-                cvm_track_id = getattr(tr, "TrackId", None)
-                track_status = getattr(tr, "Status", 0)
-                track_resource_type = getattr(tr, "ResourceType", "")
-                
-                # Check if track is valid (Status=1, ResourceType=cvm)
-                if track_status == 1 and track_resource_type == "cvm":
-                    print(json.dumps({
-                        "step": "cvm_track",
-                        "status": "exists",
-                        "track_id": cvm_track_id,
-                        "action": "skip_recreation"
-                    }))
-                    cvm_track_valid = True
-                break
-        
-        # Only create CVM track if it doesn't exist or is invalid
-        if not cvm_track_valid:
-            # Delete old track if it exists but is invalid
-            if cvm_track_id:
-                print(json.dumps({"debug": "deleting_invalid_cvm_track", "track_id": cvm_track_id}))
-                try:
-                    delreq = audit_models.DeleteAuditTrackRequest()
-                    setattr(delreq, "TrackId", cvm_track_id)
-                    client.DeleteAuditTrack(delreq)
-                    print(json.dumps({"step": "cvm_track", "status": "deleted", "track_id": cvm_track_id}))
-                except Exception as del_err:
-                    print(json.dumps({"warning": "delete_cvm_track_failed", "error": str(del_err)}))
-            
-            # Create new CVM track
-            print(json.dumps({"debug": "create_cvm_track_request", "resource_type": "cvm", "event_names": cvm_event_names}))
-            cvm_creq = audit_models.CreateAuditTrackRequest()
-            setattr(cvm_creq, "Name", cvm_track_name)
-            setattr(cvm_creq, "Status", 1)
-            setattr(cvm_creq, "ActionType", "Write")
-            setattr(cvm_creq, "ResourceType", "cvm")
-            setattr(cvm_creq, "EventNames", cvm_event_names)
-            setattr(cvm_creq, "Storage", storage)
-            cvm_cresp = client.CreateAuditTrack(cvm_creq)
-            cvm_track_id = getattr(cvm_cresp, "TrackId", None)
-            print(json.dumps({"step": "cvm_track", "status": "created", "track_id": cvm_track_id, "scope": "all_regions", "resource_type": "cvm", "events": cvm_event_names}))
-        
-        # Check CLB track
-        clb_track_id = None
-        clb_track_valid = False
-        for tr in getattr(dresp, "Tracks", []) or []:
-            if getattr(tr, "Name", "") == clb_track_name:
-                clb_track_id = getattr(tr, "TrackId", None)
-                track_status = getattr(tr, "Status", 0)
-                track_resource_type = getattr(tr, "ResourceType", "")
-                
-                # Check if track is valid (Status=1, ResourceType=clb)
-                if track_status == 1 and track_resource_type == "clb":
-                    print(json.dumps({
-                        "step": "clb_track",
-                        "status": "exists",
-                        "track_id": clb_track_id,
-                        "action": "skip_recreation"
-                    }))
-                    clb_track_valid = True
-                break
-        
-        # Only create CLB track if needed
-        if not clb_track_valid:
-            # Delete old track if it exists but is invalid
-            if clb_track_id:
-                print(json.dumps({"debug": "deleting_invalid_clb_track", "track_id": clb_track_id}))
-                try:
-                    delreq = audit_models.DeleteAuditTrackRequest()
-                    setattr(delreq, "TrackId", clb_track_id)
-                    client.DeleteAuditTrack(delreq)
-                    print(json.dumps({"step": "clb_track", "status": "deleted", "track_id": clb_track_id}))
-                except Exception as del_err:
-                    print(json.dumps({"warning": "delete_clb_track_failed", "error": str(del_err)}))
-            
-            # Create new CLB track
-            print(json.dumps({"debug": "create_clb_track_request", "resource_type": "clb", "event_names": clb_event_names}))
-            clb_creq = audit_models.CreateAuditTrackRequest()
-            setattr(clb_creq, "Name", clb_track_name)
-            setattr(clb_creq, "Status", 1)
-            setattr(clb_creq, "ActionType", "Write")
-            setattr(clb_creq, "ResourceType", "clb")
-            setattr(clb_creq, "EventNames", clb_event_names)
-            setattr(clb_creq, "Storage", storage)
-            clb_cresp = client.CreateAuditTrack(clb_creq)
-            clb_track_id = getattr(clb_cresp, "TrackId", None)
-            print(json.dumps({"step": "clb_track", "status": "created", "track_id": clb_track_id, "scope": "all_regions", "resource_type": "clb", "events": clb_event_names}))
-        
-        # Check CBS track
-        cbs_track_id = None
-        cbs_track_valid = False
-        for tr in getattr(dresp, "Tracks", []) or []:
-            if getattr(tr, "Name", "") == cbs_track_name:
-                cbs_track_id = getattr(tr, "TrackId", None)
-                track_status = getattr(tr, "Status", 0)
-                track_resource_type = getattr(tr, "ResourceType", "")
-                
-                # Check if track is valid (Status=1, ResourceType=cbs)
-                if track_status == 1 and track_resource_type == "cbs":
-                    print(json.dumps({
-                        "step": "cbs_track",
-                        "status": "exists",
-                        "track_id": cbs_track_id,
-                        "action": "skip_recreation"
-                    }))
-                    cbs_track_valid = True
-                break
-        
-        # Only create CBS track if needed
-        if not cbs_track_valid:
-            # Delete old track if it exists but is invalid
-            if cbs_track_id:
-                print(json.dumps({"debug": "deleting_invalid_cbs_track", "track_id": cbs_track_id}))
-                try:
-                    delreq = audit_models.DeleteAuditTrackRequest()
-                    setattr(delreq, "TrackId", cbs_track_id)
-                    client.DeleteAuditTrack(delreq)
-                    print(json.dumps({"step": "cbs_track", "status": "deleted", "track_id": cbs_track_id}))
-                except Exception as del_err:
-                    print(json.dumps({"warning": "delete_cbs_track_failed", "error": str(del_err)}))
-            
-            # Create new CBS track
-            print(json.dumps({"debug": "create_cbs_track_request", "resource_type": "cbs", "event_names": cbs_event_names}))
-            cbs_creq = audit_models.CreateAuditTrackRequest()
-            setattr(cbs_creq, "Name", cbs_track_name)
-            setattr(cbs_creq, "Status", 1)
-            setattr(cbs_creq, "ActionType", "Write")
-            setattr(cbs_creq, "ResourceType", "cbs")
-            setattr(cbs_creq, "EventNames", cbs_event_names)
-            setattr(cbs_creq, "Storage", storage)
-            cbs_cresp = client.CreateAuditTrack(cbs_creq)
-            cbs_track_id = getattr(cbs_cresp, "TrackId", None)
-            print(json.dumps({"step": "cbs_track", "status": "created", "track_id": cbs_track_id, "scope": "all_regions", "resource_type": "cbs", "events": cbs_event_names}))
-        
-        # Return CVM track ID for backward compatibility
-        return cvm_track_id
-        
+        existing_tracks = getattr(dresp, "Tracks", []) or []
+        print(json.dumps({"step": "audit_tracks", "existing_count": len(existing_tracks),
+                          "names": [getattr(t, "Name", "") for t in existing_tracks]}))
     except Exception as e:
-        tb = traceback.format_exc()
-        print(json.dumps({
-            "step": "audit_track",
-            "error": str(e),
-            "traceback": tb
-        }))
+        print(json.dumps({"step": "audit_tracks", "error": "list_failed", "message": str(e)}))
         return None
+
+    def _find_track(tracks, name):
+        for tr in tracks:
+            if getattr(tr, "Name", "") == name:
+                return tr
+        return None
+
+    def _ensure_track(track_name, resource_type, event_names):
+        """Create or validate a single track. Returns track_id or None."""
+        tr = _find_track(existing_tracks, track_name)
+        track_id = getattr(tr, "TrackId", None) if tr else None
+        track_valid = False
+
+        if tr:
+            track_status = getattr(tr, "Status", 0)
+            track_rt = getattr(tr, "ResourceType", "")
+            track_evts = sorted(getattr(tr, "EventNames", []) or [])
+            if track_status == 1 and track_rt == resource_type and track_evts == sorted(event_names):
+                print(json.dumps({"step": track_name, "status": "exists", "track_id": track_id,
+                                  "action": "skip_recreation", "event_names": track_evts}))
+                track_valid = True
+            else:
+                print(json.dumps({"step": track_name, "status": "needs_update", "track_id": track_id,
+                                  "current_status": track_status, "current_rt": track_rt,
+                                  "current_events": track_evts, "desired_events": sorted(event_names)}))
+
+        if not track_valid:
+            if track_id:
+                try:
+                    delreq = audit_models.DeleteAuditTrackRequest()
+                    setattr(delreq, "TrackId", track_id)
+                    client.DeleteAuditTrack(delreq)
+                    print(json.dumps({"step": track_name, "status": "deleted", "track_id": track_id}))
+                except Exception as del_err:
+                    print(json.dumps({"warning": f"delete_{track_name}_failed", "error": str(del_err)}))
+
+            try:
+                print(json.dumps({"debug": f"create_{track_name}", "resource_type": resource_type, "event_names": event_names}))
+                creq = audit_models.CreateAuditTrackRequest()
+                setattr(creq, "Name", track_name)
+                setattr(creq, "Status", 1)
+                setattr(creq, "ActionType", "Write")
+                setattr(creq, "ResourceType", resource_type)
+                setattr(creq, "EventNames", event_names)
+                setattr(creq, "Storage", storage)
+                cresp = client.CreateAuditTrack(creq)
+                track_id = getattr(cresp, "TrackId", None)
+                print(json.dumps({"step": track_name, "status": "created", "track_id": track_id,
+                                  "resource_type": resource_type, "events": event_names}))
+            except Exception as create_err:
+                print(json.dumps({"error": f"create_{track_name}_failed",
+                                  "resource_type": resource_type, "event_names": event_names,
+                                  "message": str(create_err), "traceback": traceback.format_exc()}))
+                track_id = None
+
+        return track_id
+
+    cvm_track_id = _ensure_track(cvm_track_name, "cvm", cvm_event_names)
+    clb_track_id = _ensure_track(clb_track_name, "clb", clb_event_names)
+    cbs_track_id = _ensure_track(cbs_track_name, "cbs", cbs_event_names)
+
+    return cvm_track_id
 
 
 def ensure_audit_tracks_all_regions(bucket_region: str, bucket: str) -> Dict[str, Optional[str]]:
@@ -470,25 +391,26 @@ def build_cbs_tags(owner: str, disk_usage: str = "SYSTEM", linked_cvm: bool = Fa
 
 
 def find_recent_disk_with_retry(region: str, event_time: int, window_seconds: int = 300, 
-                                  max_retries: int = 2, delays: Optional[List[int]] = None) -> Optional[str]:
+                                  max_retries: int = 4, delays: Optional[List[int]] = None) -> Optional[str]:
     """
     Find most recently created disk with retry logic for timing issues.
     
-    CBS disk provisioning can take 10-30 seconds, and CloudAudit events may arrive before
-    the disk gets an ID assigned. This function retries with exponential backoff.
+    CBS disk provisioning can take 10-30s for pay-as-you-go, but **minutes** for
+    monthly subscription (prepaid) disks where the order must complete first.
+    This function retries with increasing delays to handle both cases.
     
     Args:
         region: Region to search
         event_time: CloudAudit event timestamp (unix epoch)
         window_seconds: Time window in seconds (default 300 = 5 minutes)
-        max_retries: Maximum number of retry attempts (default 2)
-        delays: List of delay seconds between retries (default [10, 20])
+        max_retries: Maximum number of retry attempts (default 4)
+        delays: List of delay seconds between retries (default [10, 20, 30, 40] = 100s total)
     
     Returns:
         Disk ID of most recent disk, or None if not found after all retries
     """
     if delays is None:
-        delays = [10, 20]  # Longer delays: 10s, 20s (total 30s wait)
+        delays = [10, 20, 30, 40]  # Total 100s wait — enough for prepaid provisioning
     
     for attempt in range(max_retries + 1):  # +1 for initial attempt
         disk_id = find_recent_disk(region, event_time, window_seconds)
@@ -525,8 +447,11 @@ def find_recent_disk_with_retry(region: str, event_time: int, window_seconds: in
 
 def find_recent_disk(region: str, event_time: int, window_seconds: int = 300) -> Optional[str]:
     """
-    Find most recently created disk in region within time window.
-    Used when CloudAudit event has empty resourceSet (console-created disks).
+    Find most recently created untagged disk in region within time window.
+    Used when CloudAudit event has empty resourceSet (console/prepaid disks).
+    
+    Sorts results by creation time descending and skips disks that already
+    have Tagger tags applied.
     
     Args:
         region: Region to search
@@ -534,7 +459,7 @@ def find_recent_disk(region: str, event_time: int, window_seconds: int = 300) ->
         window_seconds: Time window in seconds (default 300 = 5 minutes)
     
     Returns:
-        Disk ID of most recent disk, or None
+        Disk ID of most recent untagged disk, or None
     """
     client = make_tc_client("cbs", cbs_client.CbsClient, region)
     if not client:
@@ -542,15 +467,15 @@ def find_recent_disk(region: str, event_time: int, window_seconds: int = 300) ->
     
     try:
         req = cbs_models.DescribeDisksRequest()
-        req.Limit = 20  # Check last 20 disks
+        req.Limit = 20
+        req.Order = "DESC"
+        req.OrderField = "CREATE_TIME"
         resp = client.DescribeDisks(req)
         
         disks = getattr(resp, "DiskSet", [])
         if not disks:
             return None
         
-        # Find disk created within time window
-        import datetime
         event_dt = datetime.datetime.fromtimestamp(event_time)
         
         for disk in disks:
@@ -559,21 +484,28 @@ def find_recent_disk(region: str, event_time: int, window_seconds: int = 300) ->
                 continue
             
             try:
-                # Parse CBS CreateTime format: "2026-02-23 12:34:56"
                 create_dt = datetime.datetime.strptime(create_time_str, "%Y-%m-%d %H:%M:%S")
                 time_diff = abs((create_dt - event_dt).total_seconds())
                 
                 if time_diff <= window_seconds:
                     disk_id = getattr(disk, "DiskId", "")
+                    
+                    # Skip disks that already have Tagger tags
+                    disk_tags = getattr(disk, "Tags", []) or []
+                    has_tagger = any(
+                        getattr(t, "Key", "") == "TaggerOwner" or getattr(t, "TagKey", "") == "TaggerOwner"
+                        for t in disk_tags
+                    )
+                    if has_tagger:
+                        continue
+                    
                     print(json.dumps({
-                        "debug": "found_matching_disk",
+                        "info": "found_recent_disk",
                         "disk_id": disk_id,
-                        "create_time": create_time_str,
-                        "event_time": event_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                        "time_diff_seconds": int(time_diff)
+                        "create_time": create_time_str
                     }))
                     return disk_id
-            except Exception as parse_err:
+            except Exception:
                 continue
         
         return None
@@ -663,7 +595,7 @@ def parse_disk_usage(disk_usage: str) -> str:
 
 def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
     """
-    Handle CBS disk tagging for CreateCbsStorages and AttachDisks events.
+    Handle CBS disk tagging for CreateCbsStorages, CreateDisks, and AttachDisks events.
     
     Strategy:
     - For attached disks: Copy TaggerProject from CVM, recreate other tags
@@ -674,17 +606,8 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
         True if tagging succeeded, False otherwise
     """
     event_name = rec.get("eventName", "")
-    if event_name not in ("CreateCbsStorages", "AttachDisks"):
+    if event_name not in ("CreateCbsStorages", "CreateDisks", "AttachDisks"):
         return False
-    
-    # Debug: Log event structure
-    print(json.dumps({
-        "debug": "cbs_event_structure",
-        "has_resourceSet": "resourceSet" in rec,
-        "has_responseElements": "responseElements" in rec,
-        "has_requestParameters": "requestParameters" in rec,
-        "region_extracted": extract_region(rec)
-    }))
     
     # Extract disk ID and region
     disk_id = None
@@ -692,34 +615,35 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
     
     # Try resourceSet first (console events)
     resource_set = rec.get("resourceSet", [])
-    print(json.dumps({
-        "debug": "resourceSet_content",
-        "type": str(type(resource_set)),
-        "length": len(resource_set) if isinstance(resource_set, list) else "not_list",
-        "first_item": resource_set[0] if (isinstance(resource_set, list) and len(resource_set) > 0) else None
-    }))
     
     if resource_set and isinstance(resource_set, list) and len(resource_set) > 0:
         first_resource = resource_set[0]
         if isinstance(first_resource, dict):
-            disk_id = first_resource.get("resourceId")
+            disk_id_raw = first_resource.get("resourceId")
+            # Handle resourceId formats: "disk-xxx", "['disk-xxx']", '["disk-xxx"]'
+            if disk_id_raw and isinstance(disk_id_raw, str):
+                # Check for Python/JSON list-like string: "['disk-xxx']" or '["disk-xxx"]'
+                if disk_id_raw.startswith("[") and disk_id_raw.endswith("]"):
+                    try:
+                        parsed = json.loads(disk_id_raw.replace("'", '"'))
+                        if isinstance(parsed, list) and parsed:
+                            disk_id = parsed[0]
+                        else:
+                            disk_id = disk_id_raw
+                    except Exception:
+                        # Regex fallback: extract disk-xxxxx from any format
+                        m = re.search(r"(disk-[a-zA-Z0-9]+)", disk_id_raw)
+                        disk_id = m.group(1) if m else disk_id_raw
+                else:
+                    disk_id = disk_id_raw
+            else:
+                disk_id = disk_id_raw
             if not region:
                 region = first_resource.get("resourceRegion")
-            print(json.dumps({
-                "debug": "extracted_from_resourceSet",
-                "disk_id": disk_id,
-                "region": region
-            }))
     
     # Try to extract disk ID from responseElements (fallback)
     if not disk_id:
         resp_str = rec.get("responseElements", "")
-        print(json.dumps({
-            "debug": "responseElements_raw",
-            "type": str(type(resp_str)),
-            "length": len(resp_str) if resp_str else 0,
-            "preview": resp_str[:200] if resp_str else None
-        }))
         
         if resp_str and "DiskIdSet" in resp_str:
             try:
@@ -727,15 +651,8 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
                 disk_ids = resp.get("DiskIdSet", [])
                 if disk_ids:
                     disk_id = disk_ids[0]
-                    print(json.dumps({
-                        "debug": "extracted_from_responseElements",
-                        "disk_id": disk_id
-                    }))
-            except Exception as e:
-                print(json.dumps({
-                    "debug": "responseElements_parse_failed",
-                    "error": str(e)
-                }))
+            except Exception:
+                pass
     
     # For AttachDisks, also try requestParameters
     if not disk_id and event_name == "AttachDisks":
@@ -752,44 +669,19 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
         if disk_ids:
             disk_id = disk_ids[0]
     
-    # For CreateCbsStorages, check requestParameters for disk count (API-created disks)
-    if not disk_id and event_name == "CreateCbsStorages":
-        req_params_raw = rec.get("requestParameters", {})
-        if isinstance(req_params_raw, str):
-            try:
-                req_params = json.loads(req_params_raw)
-            except Exception:
-                req_params = {}
-        else:
-            req_params = req_params_raw if isinstance(req_params_raw, dict) else {}
-        
-        print(json.dumps({
-            "debug": "requestParameters_keys",
-            "keys": list(req_params.keys()) if isinstance(req_params, dict) else []
-        }))
-        
+    # For CreateCbsStorages/CreateDisks, check requestParameters for disk count (API-created disks)
+    if not disk_id and event_name in ("CreateCbsStorages", "CreateDisks"):
         # Console-created disks: resourceSet empty initially, query CBS for recent disks
         if region:
-            print(json.dumps({
-                "info": "cbs_querying_recent_disks_with_retry",
-                "reason": "resourceSet_empty_on_console_creation",
-                "region": region
-            }))
             disk_id = find_recent_disk_with_retry(region, rec.get("eventTime", 0))
-            if disk_id:
-                print(json.dumps({"info": "found_recent_disk", "disk_id": disk_id}))
-            else:
+            if not disk_id:
                 print(json.dumps({
                     "warning": "no_recent_disk_found_after_retry",
-                    "note": "disk provisioning may take longer than expected, or event arrived too early"
+                    "region": region
                 }))
                 return False
         else:
-            print(json.dumps({
-                "info": "cbs_event_incomplete",
-                "reason": "disk_id_not_yet_available",
-                "note": "Cannot query CBS without region"
-            }))
+            print(json.dumps({"error": "cbs_no_region", "event": event_name}))
             return False
     
     if not disk_id or not region:
@@ -860,53 +752,19 @@ def handle_cbs_tagging(rec: Dict[str, Any]) -> bool:
     else:
         owner_uin = ""
     
-    print(json.dumps({
-        "debug": "user_identity_for_qcs",
-        "userIdentity": user_id,
-        "extracted_uin": owner_uin
-    }))
-    
     # Build QCS for CBS disk - CBS uses cvm service type with volume prefix
     # Format: qcs::cvm:region:uin/xxx:volume/disk-xxx
     qcs = f"qcs::cvm:{region}:uin/{owner_uin}:volume/{disk_id}"
     
-    # Log tags being applied
-    print(json.dumps({
-        "info": "applying_cbs_tags",
-        "disk_id": disk_id,
-        "qcs": qcs,
-        "tags": tags
-    }))
-    
     # Apply tags using Tag API (standard approach for all Tencent Cloud resources)
     try:
         tag_resource_qcs(region, qcs, tags)
-        print(json.dumps({"success": "cbs_tagged", "disk_id": disk_id, "qcs": qcs}))
-        
-        # Verify tags were applied by querying CBS API directly
-        try:
-            disk_info_verify = get_disk_info(disk_id, region)
-            if disk_info_verify:
-                cbs_tags = disk_info_verify.get("Tags", [])
-                print(json.dumps({
-                    "info": "cbs_tags_verified",
-                    "disk_id": disk_id,
-                    "cbs_api_tags_count": len(cbs_tags),
-                    "cbs_tags": cbs_tags
-                }))
-            else:
-                print(json.dumps({
-                    "warning": "cbs_verification_failed",
-                    "disk_id": disk_id,
-                    "reason": "could_not_query_disk"
-                }))
-        except Exception as ve:
-            print(json.dumps({
-                "warning": "cbs_verification_failed",
-                "disk_id": disk_id,
-                "error": str(ve)
-            }))
-        
+        print(json.dumps({
+            "success": "cbs_tagged",
+            "disk_id": disk_id,
+            "region": region,
+            "tags_applied": len(tags)
+        }))
         return True
     except Exception as e:
         print(json.dumps({"error": "cbs_tagging_failed", "disk_id": disk_id, "qcs": qcs, "message": str(e)}))
@@ -944,12 +802,6 @@ def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, pol
             instances = getattr(resp, "InstanceSet", [])
             if instances:
                 state = getattr(instances[0], "InstanceState", "")
-                print(json.dumps({
-                    "info": "cvm_state_check",
-                    "instance_id": instance_id,
-                    "state": state,
-                    "elapsed_seconds": elapsed
-                }))
                 if state == "RUNNING":
                     return "running"
                 if state in ("STOPPED", "SHUTDOWN", "TERMINATING", "TERMINATED"):
@@ -959,12 +811,6 @@ def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, pol
                         "state": state
                     }))
                     return "error"
-            else:
-                print(json.dumps({
-                    "info": "cvm_state_check_not_found_yet",
-                    "instance_id": instance_id,
-                    "elapsed_seconds": elapsed
-                }))
         except Exception as e:
             err_msg = str(e)
             # Detect permission error immediately — no point retrying
@@ -1228,11 +1074,8 @@ def handle_clb_tagging(rec: Dict[str, Any]) -> bool:
                 lb_ids = resp.get("LoadBalancerIds", [])
                 if lb_ids:
                     lb_id = lb_ids[0]
-            except Exception as e:
-                print(json.dumps({
-                    "warning": "clb_responseElements_parse_failed",
-                    "error": str(e)
-                }))
+            except Exception:
+                pass
     
     if not lb_id or not region:
         print(json.dumps({
@@ -1315,20 +1158,12 @@ def tag_resource_qcs(region: str, qcs: str, tags: List[Dict[str, str]]) -> None:
     
     try:
         resp = client.TagResources(req)
-        # Log response for debugging
-        print(json.dumps({
-            "info": "tag_api_response",
-            "qcs": qcs,
-            "request_id": getattr(resp, "RequestId", "unknown")
-        }))
     except Exception as e:
-        # Re-raise with more context
-        error_msg = str(e)
         print(json.dumps({
             "error": "tag_api_call_failed",
             "qcs": qcs,
             "region": region,
-            "message": error_msg
+            "message": str(e)
         }))
         raise
 
@@ -1668,7 +1503,7 @@ def main_handler(event, context):
                     continue
                 
                 # Handle CBS events
-                if event_name in ("CreateCbsStorages", "AttachDisks"):
+                if event_name in ("CreateCbsStorages", "CreateDisks", "AttachDisks"):
                     if handle_cbs_tagging(rec):
                         tagged += 1
                     continue
