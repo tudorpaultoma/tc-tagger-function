@@ -24,6 +24,7 @@ pip3 install -r requirements.txt -t package/ --upgrade --no-cache-dir
 echo "📁 Creating deployment package..."
 cd package && zip -r ../scf-tagger.zip . -x "*.pyc" "*/__pycache__/*" "*.DS_Store" && cd ..
 zip -g scf-tagger.zip index.py
+zip -rg scf-tagger.zip services/ -x "*.pyc" "*/__pycache__/*"
 
 # Display package info
 echo "✅ Deployment package created: scf-tagger.zip"

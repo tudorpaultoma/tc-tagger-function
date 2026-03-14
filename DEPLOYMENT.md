@@ -1,18 +1,19 @@
 # SCF Resource Tagger - Deployment Guide
 
-## ✅ Status: **DEVELOPMENT (v1.5.0)**
+## ✅ Status: **PRODUCTION (v2.1.0)**
 
-The function supports CVM, CDH, and CLB tagging. CBS support is work in progress due to Tag API limitations.
+The function supports CVM, CDH, CLB, CBS, and EIP auto-tagging across all regions.
 
-## Current Version: v1.5.0
+## Current Version: v2.1.0
 
 ### What's Working
 - ✅ **CVM instances** - Auto-tagged via `RunInstances` events
 - ✅ **CDH hosts** - Auto-tagged via `AllocateHosts` events
-- ✅ **CLB load balancers** - Auto-tagged via `CreateLoadBalancer` events (NEW)
-- ✅ **Global coverage** - CloudAudit tracks monitor ALL regions worldwide (EU, US, Asia, etc.)
+- ✅ **CLB load balancers** - Auto-tagged via `CreateLoadBalancer` events
+- ✅ **CBS disks** - Auto-tagged via `CreateCbsStorages`, `CreateDisks`, `AttachDisks` events
+- ✅ **EIP elastic IPs** - Auto-tagged via `AllocateAddresses` events (with region discovery)
+- ✅ **Global coverage** - CloudAudit tracks monitor ALL regions worldwide
 - ✅ **Cross-region delivery** - All logs from all regions deliver to your COS bucket
-- ⚠️ **CBS disks** - Function processes events but CBS doesn't honor Tag API (work in progress)
 
 ### Tags Applied
 
@@ -21,27 +22,34 @@ The function supports CVM, CDH, and CLB tagging. CBS support is work in progress
 - `TaggerCreated`: Creation date (ISO format)
 - `TaggerAutoOff`: Default "YES" (for auto-shutdown scripts)
 - `TaggerAutoStart`: Default "NO" (requires manual start)
+- `TaggerCanDelete`: Default "YES" (for auto-deletion)
 - `TaggerTTL`: Default "7" (days before auto-deletion)
 - `TaggerProject`: Default "n/a"
 
 #### CLB Tags (Network Resources)
 - `TaggerOwner`: User who created the resource (email or username)
 - `TaggerCreated`: Creation date (ISO format)
+- `TaggerCanDelete`: Default "YES" (for auto-deletion)
 - `TaggerTTL`: Default "7" (days before auto-deletion)
-- `TaggerDelete`: Default "YES" (for auto-deletion)
 - `TaggerProject`: Default "n/a"
 
-**Note**: CLB uses `TaggerDelete` instead of `TaggerAutoOff`/`TaggerAutoStart` since load balancers can only be created or deleted (no start/stop operations).
-
-#### CBS Disk Tags ⚠️
+#### CBS Disk Tags
 - `TaggerOwner`: Disk creator (email or username)
 - `TaggerCreated`: Creation date (ISO format)
-- `TaggerTTL`: Default "7" (days before auto-deletion)
-- `TaggerProject`: Copied from CVM if attached, empty string if unattached
 - `TaggerUsage`: Disk type ("SYSTEM" or "DATA")
 - `TaggerLinkedCVM`: Attachment status ("YES" or "NO")
+- `TaggerCanDelete`: Default "YES" (for auto-deletion)
+- `TaggerTTL`: Default "7" (days before auto-deletion)
+- `TaggerProject`: Copied from CVM if attached, "n/a" if unattached
 
-**Note**: CBS tags are applied successfully via Tag API but do not appear in CBS console/API. Support ticket submitted.
+#### EIP Tags (Elastic IP)
+- `TaggerOwner`: EIP creator (email or username)
+- `TaggerCreated`: Creation date (ISO format)
+- `TaggerType`: EIP type (EIP, AnycastEIP, HighQualityEIP, AntiDDoSEIP)
+- `TaggerLinkedResource`: Bound instance ID or "NONE"
+- `TaggerCanDelete`: Default "YES" (for auto-deletion)
+- `TaggerTTL`: Default "7" (days before auto-deletion)
+- `TaggerProject`: Default "n/a"
 
 ## Deployment Configuration
 
@@ -70,58 +78,61 @@ The function automatically creates/updates separate CloudAudit tracks per servic
 
 ### Track 1: CVM/CDH Resources
 - **Name**: `tagger-cvm-track`
-- **Type**: COS delivery
 - **ResourceType**: `cvm`
 - **Events**: `RunInstances` (CVM), `AllocateHosts` (CDH)
 - **Coverage**: All Tencent Cloud regions automatically
 
 ### Track 2: CLB Resources
 - **Name**: `tagger-clb-track`
-- **Type**: COS delivery
 - **ResourceType**: `clb`
 - **Events**: `CreateLoadBalancer`
 - **Coverage**: All Tencent Cloud regions automatically
 
+### Track 3: CBS Resources
+- **Name**: `tagger-cbs-track`
+- **ResourceType**: `cbs`
+- **Events**: `*` (all CBS write events)
+- **Coverage**: All Tencent Cloud regions automatically
+
+### Track 4: EIP Resources
+- **Name**: `tagger-eip-track`
+- **ResourceType**: `vpc`
+- **Events**: `AllocateAddresses`
+- **Coverage**: All Tencent Cloud regions automatically
+
 ### Common Settings
 - **Storage Path**: `cloudaudit/YYYY/MM/DD/*.txt`
-- **API Region**: CloudAudit API configured to use European endpoint (configurable via `CLOUDAUDIT_REGION` env var, defaults to `eu-frankfurt`)
+- **API Region**: `eu-frankfurt`
 - **ActionType**: `Write` (only creation events)
-
-**Important**: CloudAudit requires separate tracks per service type. Using `ResourceType: "*"` (wildcard) is not supported when specifying EventNames.
-
-**Note**: CloudAudit tracks are global by design - one track monitors all regions.
 
 ## Test Results
 
-### Latest Test (v1.4.0)
-Awaiting testing after CBS implementation.
-
-### Previous Test (v1.3.0)
+### Latest Test (v2.1.0)
 ```json
 {
   "status": "ok",
   "setup": {
     "cos_bucket_ok": true,
-    "track_ids": {"global": 641},
+    "track_ids": {"global": 694},
     "monitored_regions": ["global"]
   },
-  "processed": 0,
-  "tagged": 0,
+  "processed": 1,
+  "tagged": 1,
   "errors": []
 }
 ```
 
 ### Performance
-- **Duration**: ~2-4 seconds
-- **Memory**: ~27 MB
-- **Cold Start**: ~800-850ms
+- **Duration**: ~7-8 seconds (with EIP region discovery)
+- **Memory**: ~120 MB peak
+- **Cold Start**: ~800ms
 
 ### Confirmed Working
-- ✅ CVM instances in eu-frankfurt
-- ✅ CVM instances in all regions (EU, US, Asia)
+- ✅ CVM instances in eu-frankfurt and all regions
 - ✅ CDH hosts in all regions
-- ✅ CloudAudit track creation (Track ID: 641)
-- ⏳ CBS disks (pending testing)
+- ✅ CLB load balancers
+- ✅ CBS disks (system + data, standalone + attached)
+- ✅ EIP elastic IPs (with region discovery fallback)
 
 ## Next Steps
 
@@ -178,11 +189,16 @@ Upload the new deployment package:
 
 ## Files
 
-- `index.py` - Main function code (v1.4.0)
+- `index.py` - Main handler + shared utilities + event routing (v2.1.0)
+- `services/cvm.py` - CVM/CDH tagging + attached disk tagging
+- `services/clb.py` - CLB tagging
+- `services/cbs.py` - CBS disk tagging
+- `services/eip.py` - EIP tagging with region discovery
 - `deploy.sh` - Deployment package builder
 - `scf-tagger.zip` - Ready-to-deploy package
 - `requirements.txt` - Python dependencies
 - `policies/` - IAM policy templates
+- `ARCHITECTURE.md` - Architecture decisions
 - `CHANGELOG.md` - Version history
 
 ## Support

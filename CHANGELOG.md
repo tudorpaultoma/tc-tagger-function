@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-03-14
+
+### Fixed
+- **EIP QCS Service Type**: Changed `qcs::eip:...` → `qcs::cvm:...` in EIP resource descriptors
+  - Tag API silently accepted the wrong QCS format (`qcs::eip:...:eip/eip-xxx`) with no `FailedResources` error, but tags were never applied to the actual resource
+  - Correct format confirmed via CloudAudit `resources` field: `qcs::cvm:{region}:uin/{uin}:eip/{eip_id}`
+  - EIP belongs to the CVM service namespace in CAM/Tag (same as CBS disks)
+
+- **EIP Region Mismatch**: Added region discovery fallback when CloudAudit reports wrong region
+  - CloudAudit routes EIP events through arbitrary API endpoints (e.g. `ap-singapore` for Frankfurt EIPs)
+  - Both `eventRegion` and `eventSource` can point to the wrong region; `resourceRegion` is often empty
+  - New logic: try detected region first → if `get_eip_info()` fails, retry in `COS_REGION`
+  - Corrected region is used for both EIP info queries and tag application
+
+- **EIP Resource ID Unwrapping**: CloudAudit delivers `resourceId` as a stringified Python list
+  - Raw value: `"['eip-25vrx2ne']"` instead of `"eip-25vrx2ne"`
+  - Added `_unwrap_id()` helper that handles: Python lists, stringified lists, and plain strings
+  - Applied to both `resourceSet` extraction and `responseElements` fallback paths
+
+- **CVM Resource ID Unwrapping**: Applied same list-unwrap protection to CVM/CDH handler
+  - Added `_unwrap_resource_id()` helper to `services/cvm.py`
+  - Applied to `extract_qcs()` (RunInstances + AllocateHosts) and `_extract_instance_id()`
+
+### Changed
+- **Region Extraction**: `extract_region()` now parses `eventSource` hostname as priority 3
+  - Format: `service.REGION.api.tencentyun.com` → extracts region
+  - Sits between `requestRegion` (priority 2) and `eventRegion` (priority 4, least reliable)
+- **Version bump**: 2.0.0 → 2.1.0
+
+### Technical Details
+- CloudAudit EIP track uses `ResourceType="vpc"` but Tag API uses `qcs::cvm:...` — service namespaces differ between CloudAudit and CAM/Tag
+- EIP `DescribeAddresses` API requires `cvm:DescribeAddresses` IAM permission (VPC EIP APIs fall under `cvm` namespace)
+- Region discovery adds one extra API call only when the first `get_eip_info()` fails
+
+## [2.0.0] - 2026-03-14
+
+### Added
+- **EIP (Elastic IP) Support**: Automatic tagging for elastic IP addresses
+  - Handles `AllocateAddresses` CloudAudit events
+  - New CloudAudit track: `tagger-eip-track` (`ResourceType="eip"`)
+  - EIP-specific tag schema:
+    - `TaggerOwner` — resource creator
+    - `TaggerCreated` — creation date
+    - `TaggerType` — EIP type (EIP, AnycastEIP, HighQualityEIP, AntiDDoSEIP)
+    - `TaggerLinkedResource` — bound instance ID or "NONE"
+    - `TaggerCanDelete` — YES
+    - `TaggerTTL` — 7
+    - `TaggerProject` — n/a
+  - Queries EIP details via VPC `DescribeAddresses` API for type + bound status
+  - QCS format: `qcs::eip:{region}:uin/{uin}:eip/{eip_id}`
+
+### Changed
+- **Modular Architecture**: Split monolithic `index.py` into service modules
+  - `services/cvm.py` — CVM/CDH tagging (RunInstances, AllocateHosts) + attached disk tagging
+  - `services/clb.py` — CLB tagging (CreateLoadBalancer)
+  - `services/cbs.py` — CBS disk tagging (CreateCbsStorages, CreateDisks, AttachDisks)
+  - `services/eip.py` — EIP tagging (AllocateAddresses)
+  - `index.py` retained as main handler with shared utilities + event routing
+- **Track setup refactored**: Track definitions are now data-driven (list of dicts) instead of hardcoded variables
+- **Version bump**: 1.9.2 → 2.0.0 (breaking: modular file structure)
+
+### Technical Details
+- Service modules import shared utils (`make_tc_client`, `tag_resource_qcs`, `extract_region`, etc.) from `index`
+- Each service module is self-contained with its own tag builder, event handler, and API queries
+- No new dependencies required — VPC SDK already included in `tencentcloud-sdk-python>=3.0.110`
+- 4 CloudAudit tracks total: CVM, CLB, CBS, EIP
+
 ## [1.9.2] - 2026-03-07
 
 ### Changed

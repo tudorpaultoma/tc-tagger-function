@@ -26,6 +26,12 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 - **Console Creation**: Handles timing delays with retry logic for console-created disks
 - **Smart Tagging**: Copies project tags from attached CVM instances
 
+### 🌐 **EIP (Elastic IP)** ✅
+- **Elastic IPs** - `AllocateAddresses` events
+- **Region Discovery**: Automatically finds the correct resource region when CloudAudit reports wrong region
+- **EIP Details**: Queries VPC API for EIP type and bound instance info
+- **QCS format**: `qcs::cvm:{region}:uin/{uin}:eip/{eip_id}` (uses `cvm` service namespace)
+
 ## Features
 
 - **Global Multi-Region Support**: Automatically monitors and tags resources across ALL Tencent Cloud regions
@@ -83,6 +89,20 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 1. **CVM System/Data Disks**: Automatically tagged when a CVM is created (`RunInstances` event) — no separate CBS event needed
 2. **Standalone Disks**: Tagged via `CreateCbsStorages` or `AttachDisks` events with retry logic for provisioning delays
 
+### EIP Tags (Elastic IP)
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCreated` | Creation date | `2026-03-14` |
+| `TaggerLinkedResource` | Bound instance ID or "NONE" | `ins-abc123` or `NONE` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerType` | EIP type | `EIP`, `AnycastEIP`, `HighQualityEIP` |
+
+**Note**: EIP uses `qcs::cvm:region:uin/xxx:eip/eip-id` format for Tag API (CVM service namespace, not VPC or EIP).
+
 ## Architecture
 
 ```
@@ -103,7 +123,9 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 - `AllocateHosts` - CDH dedicated hosts ✅
 - `CreateLoadBalancer` - CLB load balancers ✅
 - `CreateCbsStorages` - CBS standalone disk creation ✅
+- `CreateDisks` - CBS standalone disk creation (pay-as-you-go) ✅
 - `AttachDisks` - CBS disk attachment to CVM ✅
+- `AllocateAddresses` - EIP elastic IP allocation ✅
 
 ## Prerequisites
 
@@ -130,7 +152,13 @@ pip install -r requirements.txt -t package/
 ### 3. Create Deployment Package
 
 ```bash
-zip -r scf-tagger.zip index.py package/
+./deploy.sh
+```
+
+Or manually:
+```bash
+zip -r scf-tagger.zip index.py services/ requirements.txt -x '*.pyc' '__pycache__/*'
+cd package && zip -rg ../scf-tagger.zip . -x '*.pyc' '__pycache__/*' '*.dist-info/*'
 ```
 
 ### 4. Deploy to SCF
@@ -212,9 +240,9 @@ Attach the following policies to your SCF execution role:
 }
 ```
 
-#### CVM/CBS Disk Policy (Required for CVM disk auto-tagging)
+#### CVM/CBS/EIP Resource Policy (Required for disk auto-tagging and EIP info)
 
-> **Note**: Both CBS disk queries and CVM instance queries use the `cvm` service namespace in Tencent Cloud IAM.
+> **Note**: CBS disk queries, CVM instance queries, and EIP queries all use the `cvm` service namespace in Tencent Cloud IAM.
 
 ```json
 {
@@ -222,7 +250,7 @@ Attach the following policies to your SCF execution role:
   "statement": [
     {
       "effect": "allow",
-      "action": ["cvm:DescribeDisks", "cvm:DescribeInstances"],
+      "action": ["cvm:DescribeDisks", "cvm:DescribeInstances", "cvm:DescribeAddresses"],
       "resource": ["*"]
     }
   ]
@@ -244,15 +272,25 @@ Attach the following policies to your SCF execution role:
 
 The function automatically configures CloudAudit tracks per service type:
 
-#### Track 1: CVM/CBS Track (`tagger-cvm-track`)
-- **Events**: `RunInstances`, `AllocateHosts`, `CreateCbsStorages`, `AttachDisks`
-- **ResourceType**: `cvm` (CBS events use CVM resource type in CloudAudit)
-- **Monitors**: CVM instances, CDH hosts, and CBS disks
+#### Track 1: CVM Track (`tagger-cvm-track`)
+- **Events**: `RunInstances`, `AllocateHosts`
+- **ResourceType**: `cvm`
+- **Monitors**: CVM instances and CDH hosts
 
 #### Track 2: CLB Track (`tagger-clb-track`)
 - **Events**: `CreateLoadBalancer`
 - **ResourceType**: `clb`
 - **Monitors**: CLB load balancers
+
+#### Track 3: CBS Track (`tagger-cbs-track`)
+- **Events**: `*` (all CBS write events)
+- **ResourceType**: `cbs`
+- **Monitors**: CBS disk creation and attachment
+
+#### Track 4: EIP Track (`tagger-eip-track`)
+- **Events**: `AllocateAddresses`
+- **ResourceType**: `vpc`
+- **Monitors**: EIP elastic IP allocation
 
 **Storage**: All tracks deliver logs to the COS bucket specified in `COS_BUCKET`/`COS_REGION`
 
@@ -354,13 +392,22 @@ The function provides detailed JSON logging for troubleshooting:
 
 ```
 scf-tagger/
-├── index.py                    # Main SCF handler
+├── index.py                    # Main SCF handler + shared utilities + event routing
+├── services/                   # Modular service handlers
+│   ├── __init__.py
+│   ├── cvm.py                  # CVM/CDH tagging + attached disk tagging
+│   ├── clb.py                  # CLB tagging
+│   ├── cbs.py                  # CBS disk tagging
+│   └── eip.py                  # EIP tagging with region discovery
 ├── requirements.txt            # Python dependencies
 ├── policies/                   # IAM policy templates
 │   ├── cos-policy.json
 │   ├── audit-policy.json
 │   └── tag-policy.json
-├── package/                    # Dependencies (created by pip install -t)
+├── deploy.sh                   # Deployment package builder
+├── ARCHITECTURE.md             # Architecture decisions and design
+├── CHANGELOG.md                # Version history
+├── DEPLOYMENT.md               # Deployment guide
 └── README.md
 ```
 
