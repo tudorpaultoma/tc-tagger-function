@@ -27,15 +27,28 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 - **Smart Tagging**: Copies project tags from attached CVM instances
 
 ### 🌐 **EIP (Elastic IP)** ✅
-- **Elastic IPs** - `AllocateAddresses` events
-- **Region Discovery**: Automatically finds the correct resource region when CloudAudit reports wrong region
+- **Elastic IPs** - `AllocateAddresses` and `TransformAddress` events
+- **Public IP → EIP Conversion**: Automatically tags EIPs created by converting a CVM's public IP
+- **Region Discovery**: Probes all international regions when CloudAudit reports wrong region
 - **EIP Details**: Queries VPC API for EIP type and bound instance info
 - **QCS format**: `qcs::cvm:{region}:uin/{uin}:eip/{eip_id}` (uses `cvm` service namespace)
+
+### 🔌 **ENI (Elastic Network Interface)** ✅
+- **Network Interfaces** - `CreateNetworkInterface` events
+- **Region Discovery**: Same fallback logic as EIP for correct region detection
+- **Attachment Info**: Queries VPC API for bound CVM instance
+- **QCS format**: `qcs::vpc:{region}:uin/{uin}:eni/{eni_id}` (uses `vpc` service namespace)
+
+### 🔄 **HAVIP (High Availability Virtual IP)** ✅
+- **HA Virtual IPs** - `CreateHaVip` events
+- **Always Standalone**: HAVIPs belong to a subnet in a VPC (not created by CVM)
+- **VPC/Subnet Info**: Queries VPC API for subnet and VPC details
+- **QCS format**: `qcs::vpc:{region}:uin/{uin}:havip/{havip_id}` (uses `vpc` service namespace)
 
 ## Features
 
 - **Global Multi-Region Support**: Automatically monitors and tags resources across ALL Tencent Cloud regions
-- **Multi-Resource Support**: Tags CVM instances, CDH hosts, CLB load balancers, and CBS disks automatically
+- **Multi-Resource Support**: Tags CVM instances, CDH hosts, CLB load balancers, CBS disks, EIPs, ENIs, and HAVIPs automatically
 - **Automatic Tagging**: Tags resources immediately after creation
 - **CloudAudit Integration**: Separate CloudAudit tracks per service type for reliable event delivery
 - **Flexible Owner Detection**: Prioritizes email, username, account ID, or UIN for owner identification
@@ -57,7 +70,7 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 | `TaggerCreated` | Creation date | `2026-02-25` |
 | `TaggerOwner` | Resource owner (email, username, or account ID) | `john.doe@company.com` or `account:1301327510` |
 | `TaggerProject` | Project designation | `n/a` |
-| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
 
 **Note**: These tags apply to resources with start/stop operations (CVM instances, CDH hosts).
 
@@ -69,7 +82,7 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 | `TaggerCreated` | Creation date | `2026-02-25` |
 | `TaggerOwner` | Resource owner (email, username, or account ID) | `john.doe@company.com` or `account:1301327510` |
 | `TaggerProject` | Project designation | `n/a` |
-| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
 
 **Note**: CLB resources can only be created or deleted (no start/stop operations).
 
@@ -82,7 +95,7 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 | `TaggerLinkedCVM` | Whether disk is attached to a CVM | `YES` or `NO` |
 | `TaggerOwner` | Disk creator (email, username, or account ID) | `john.doe@company.com` |
 | `TaggerProject` | Project name (copied from CVM if attached) | `analytics` or `n/a` |
-| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
 | `TaggerUsage` | Disk type (default: SYSTEM) | `SYSTEM` or `DATA` |
 
 **Note**: CBS disks use `qcs::cvm:region:uin/xxx:volume/disk-id` format for Tag API. CBS disks are tagged via two paths:
@@ -98,10 +111,37 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 | `TaggerLinkedResource` | Bound instance ID or "NONE" | `ins-abc123` or `NONE` |
 | `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
 | `TaggerProject` | Project designation | `n/a` |
-| `TaggerTTL` | Time-to-live in days before deletion | `7` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
 | `TaggerType` | EIP type | `EIP`, `AnycastEIP`, `HighQualityEIP` |
 
 **Note**: EIP uses `qcs::cvm:region:uin/xxx:eip/eip-id` format for Tag API (CVM service namespace, not VPC or EIP).
+
+### ENI Tags (Elastic Network Interface)
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCreated` | Creation date | `2026-03-14` |
+| `TaggerLinkedResource` | Bound CVM instance ID or "NONE" | `ins-abc123` or `NONE` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
+
+**Note**: ENI uses `qcs::vpc:region:uin/xxx:eni/eni-id` format for Tag API (VPC service namespace).
+
+### HAVIP Tags (High Availability Virtual IP)
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCreated` | Creation date | `2026-03-14` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerSubnet` | Subnet ID the HAVIP belongs to | `subnet-abc123` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
+| `TaggerVpc` | VPC ID the HAVIP belongs to | `vpc-abc123` |
+
+**Note**: HAVIP uses `qcs::vpc:region:uin/xxx:havip/havip-id` format for Tag API (VPC service namespace).
 
 ## Architecture
 
@@ -115,6 +155,7 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 3. **SCF** processes new log files via COS triggers
 4. **Tag API** applies standardized tags to resources
 5. **CBS API** queries disks attached to CVM instances for automatic disk tagging
+6. **VPC API** queries ENI attachment info, HAVIP subnet/VPC details, and EIP status
 
 **Note**: CloudAudit tracks are global by default - a single track monitors all regions automatically.
 
@@ -126,6 +167,9 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 - `CreateDisks` - CBS standalone disk creation (pay-as-you-go) ✅
 - `AttachDisks` - CBS disk attachment to CVM ✅
 - `AllocateAddresses` - EIP elastic IP allocation ✅
+- `TransformAddress` - Public IP → EIP conversion ✅
+- `CreateNetworkInterface` - ENI elastic network interface creation ✅
+- `CreateHaVip` - HAVIP high availability virtual IP creation ✅
 
 ## Prerequisites
 
@@ -257,6 +301,23 @@ Attach the following policies to your SCF execution role:
 }
 ```
 
+#### VPC Resource Policy (Required for ENI and HAVIP info)
+
+> **Note**: ENI and HAVIP queries use the `vpc` service namespace.
+
+```json
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": ["vpc:DescribeNetworkInterfaces", "vpc:DescribeHaVips"],
+      "resource": ["*"]
+    }
+  ]
+}
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -287,10 +348,10 @@ The function automatically configures CloudAudit tracks per service type:
 - **ResourceType**: `cbs`
 - **Monitors**: CBS disk creation and attachment
 
-#### Track 4: EIP Track (`tagger-eip-track`)
-- **Events**: `AllocateAddresses`
+#### Track 4: VPC Track (`tagger-vpc-track`)
+- **Events**: `AllocateAddresses`, `CreateNetworkInterface`, `CreateHaVip`, `TransformAddress`
 - **ResourceType**: `vpc`
-- **Monitors**: EIP elastic IP allocation
+- **Monitors**: EIP allocation, EIP conversion, ENI creation, HAVIP creation
 
 **Storage**: All tracks deliver logs to the COS bucket specified in `COS_BUCKET`/`COS_REGION`
 
@@ -327,7 +388,7 @@ CBS disks are tagged using two strategies:
 
 Once deployed and configured, the function operates automatically:
 
-1. Create a new CVM instance, CDH host, CLB load balancer, or CBS disk in any region
+1. Create a new CVM instance, CDH host, CLB load balancer, CBS disk, EIP, ENI, or HAVIP in any region
 2. CloudAudit captures the creation event
 3. Event is stored in COS bucket
 4. SCF function is triggered by new COS object
@@ -398,7 +459,9 @@ scf-tagger/
 │   ├── cvm.py                  # CVM/CDH tagging + attached disk tagging
 │   ├── clb.py                  # CLB tagging
 │   ├── cbs.py                  # CBS disk tagging
-│   └── eip.py                  # EIP tagging with region discovery
+│   ├── eip.py                  # EIP tagging (AllocateAddresses, TransformAddress)
+│   ├── eni.py                  # ENI tagging with region discovery
+│   └── havip.py                # HAVIP tagging with VPC/subnet info
 ├── requirements.txt            # Python dependencies
 ├── policies/                   # IAM policy templates
 │   ├── cos-policy.json
@@ -469,7 +532,7 @@ The architecture uses **separate CloudAudit tracks per service type**. To add su
 
 ## Cost Optimization
 
-- **Event Filtering**: Only processes `RunInstances` events to minimize execution
+- **Event Filtering**: Only processes creation events to minimize execution
 - **Efficient Processing**: Batch processes multiple events per invocation
 - **Resource Cleanup**: No persistent resources created
 

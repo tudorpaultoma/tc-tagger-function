@@ -32,7 +32,7 @@ def build_tags(owner: str) -> List[Dict[str, str]]:
         {"TagKey": "TaggerAutoOff",   "TagValue": "YES"},
         {"TagKey": "TaggerAutoStart", "TagValue": "NO"},
         {"TagKey": "TaggerCanDelete", "TagValue": "YES"},
-        {"TagKey": "TaggerTTL",       "TagValue": "7"},
+        {"TagKey": "TaggerTTL",       "TagValue": "3"},
         {"TagKey": "TaggerProject",   "TagValue": "n/a"},
     ]
 
@@ -406,17 +406,33 @@ def _query_and_tag_disks(instance_id: str, region: str, owner: str, owner_uin: s
     return disks_tagged
 
 
+def _resolve_cvm_region(rec: Dict[str, Any]) -> str:
+    """
+    Resolve the actual region for a CVM event.
+    
+    Priority:
+    1. Placement.Zone from requestParameters (most reliable — chosen by user)
+    2. resourceRegion from resourceSet
+    3. extract_region() fallback
+    """
+    from index import extract_region
+    zone_region = _extract_region_from_params(rec)
+    if zone_region:
+        return zone_region
+    return extract_region(rec) or ""
+
+
 def handle_cvm_tagging(rec: Dict[str, Any]) -> int:
     """
     Handle CVM/CDH tagging for RunInstances and AllocateHosts events.
     
     Returns:
-        Number of resources tagged (1 for CVM/CDH + N attached disks)
+        Number of resources tagged (1 for CVM/CDH + N attached disks + N attached ENIs)
     """
-    from index import extract_region, extract_account_uin, get_owner, tag_resource_qcs
+    from index import extract_account_uin, get_owner, tag_resource_qcs
 
     owner      = get_owner(rec)
-    res_region = extract_region(rec)
+    res_region = _resolve_cvm_region(rec)
     qcs        = extract_qcs(rec)
     tagged     = 0
 
@@ -436,7 +452,7 @@ def handle_cvm_tagging(rec: Dict[str, Any]) -> int:
         print(json.dumps({"error": "cvm_tagging_failed", "qcs": qcs, "region": res_region, "message": str(te)}))
         return 0
 
-    # Tag CBS disks attached to this CVM (system disk + any data disks)
+    # Tag CBS disks and ENIs attached to this CVM
     if rec.get("eventName") == "RunInstances":
         instance_id = _extract_instance_id(rec)
         if instance_id:
@@ -451,8 +467,100 @@ def handle_cvm_tagging(rec: Dict[str, Any]) -> int:
                     "region": res_region,
                     "message": str(de)
                 }))
+            try:
+                enis_tagged = tag_cvm_attached_enis(instance_id, res_region, owner, owner_uin)
+                tagged += enis_tagged
+            except Exception as ee:
+                print(json.dumps({
+                    "error": "cvm_eni_tagging_failed",
+                    "instance_id": instance_id,
+                    "region": res_region,
+                    "message": str(ee)
+                }))
 
     return tagged
+
+
+def tag_cvm_attached_enis(instance_id: str, region: str, owner: str, owner_uin: str) -> int:
+    """
+    Find and tag all ENIs attached to a CVM instance.
+    
+    Called after CVM tagging on RunInstances events. ENIs created alongside
+    CVM instances don't generate separate CreateNetworkInterface events.
+    """
+    from index import make_tc_client, tag_resource_qcs
+    from tencentcloud.vpc.v20170312 import vpc_client, models as vpc_models
+    from services.eni import build_eni_tags
+
+    try:
+        client = make_tc_client("vpc", vpc_client.VpcClient, region)
+        if not client:
+            print(json.dumps({"error": "cvm_eni_tagging_no_vpc_client", "region": region}))
+            return 0
+
+        req = vpc_models.DescribeNetworkInterfacesRequest()
+        req.Filters = [{"Name": "attachment.instance-id", "Values": [instance_id]}]
+        resp = client.DescribeNetworkInterfaces(req)
+
+        enis = getattr(resp, "NetworkInterfaceSet", [])
+        if not enis:
+            print(json.dumps({
+                "info": "cvm_eni_query_none",
+                "instance_id": instance_id,
+                "region": region
+            }))
+            return 0
+
+        print(json.dumps({
+            "info": "cvm_eni_query_success",
+            "instance_id": instance_id,
+            "enis_found": len(enis)
+        }))
+    except Exception as e:
+        print(json.dumps({
+            "error": "cvm_eni_query_failed",
+            "instance_id": instance_id,
+            "region": region,
+            "message": str(e)
+        }))
+        return 0
+
+    enis_tagged = 0
+    for eni in enis:
+        eni_id = getattr(eni, "NetworkInterfaceId", "")
+        if not eni_id:
+            continue
+
+        tags = build_eni_tags(owner=owner, linked_resource=instance_id)
+        qcs = f"qcs::vpc:{region}:uin/{owner_uin}:eni/{eni_id}"
+
+        try:
+            tag_resource_qcs(region, qcs, tags)
+            enis_tagged += 1
+            print(json.dumps({
+                "success": "cvm_attached_eni_tagged",
+                "instance_id": instance_id,
+                "eni_id": eni_id,
+                "qcs": qcs
+            }))
+        except Exception as e:
+            print(json.dumps({
+                "error": "cvm_attached_eni_tagging_failed",
+                "instance_id": instance_id,
+                "eni_id": eni_id,
+                "qcs": qcs,
+                "message": str(e)
+            }))
+
+    if enis_tagged > 0:
+        print(json.dumps({
+            "info": "cvm_attached_enis_tagged_summary",
+            "instance_id": instance_id,
+            "enis_tagged": enis_tagged,
+            "total_enis": len(enis)
+        }))
+
+    return enis_tagged
 
 
 def _unwrap_resource_id(val):

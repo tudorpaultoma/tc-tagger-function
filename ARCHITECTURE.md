@@ -16,7 +16,9 @@ tc-tagger-function/
 │   ├── cvm.py               # CVM/CDH tagging (RunInstances, AllocateHosts)
 │   ├── clb.py               # CLB tagging (CreateLoadBalancer)
 │   ├── cbs.py               # CBS disk tagging (CreateCbsStorages, CreateDisks, AttachDisks)
-│   └── eip.py               # EIP tagging (AllocateAddresses)
+│   ├── eip.py               # EIP tagging (AllocateAddresses, TransformAddress)
+│   ├── eni.py               # ENI tagging (CreateNetworkInterface)
+│   └── havip.py             # HAVIP tagging (CreateHaVip)
 ├── policies/
 │   ├── audit-policy.json
 │   ├── cos-policy.json
@@ -35,7 +37,9 @@ tc-tagger-function/
 | `services/cvm.py` | CVM/CDH tag builder, QCS extraction, CVM state polling, attached disk tagging |
 | `services/clb.py` | CLB tag builder, LB ID extraction, CLB tagging handler |
 | `services/cbs.py` | CBS tag builder, disk info queries, recent disk finder with retries, CBS tagging handler |
-| `services/eip.py` | EIP tag builder, EIP info queries via VPC API, EIP tagging handler |
+| `services/eip.py` | EIP tag builder, EIP info queries via VPC API, instance-based EIP discovery, region probing, EIP tagging handler |
+| `services/eni.py` | ENI tag builder, ENI info queries via VPC API, ENI tagging handler |
+| `services/havip.py` | HAVIP tag builder, HAVIP info queries via VPC API, HAVIP tagging handler |
 
 Service modules import shared utils from `index` via `from index import make_tc_client, tag_resource_qcs, ...`.
 
@@ -71,10 +75,11 @@ Initially attempted to use a single CloudAudit track with:
 │                            CloudAudit Service                                │
 │                                                                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │ Track 1: CVM │  │ Track 2: CLB │  │ Track 3: CBS │  │ Track 4: EIP │    │
-│  │ RT: cvm      │  │ RT: clb      │  │ RT: cbs      │  │ RT: eip      │    │
+│  │ Track 1: CVM │  │ Track 2: CLB │  │ Track 3: CBS │  │ Track 4: VPC │    │
+│  │ RT: cvm      │  │ RT: clb      │  │ RT: cbs      │  │ RT: vpc      │    │
 │  │ RunInstances │  │ CreateLoad.. │  │ ["*"]        │  │ AllocateAddr │    │
-│  │ AllocateHost │  │              │  │              │  │              │    │
+│  │ AllocateHost │  │              │  │              │  │ CreateNetwor │    │
+│  │              │  │              │  │              │  │ CreateHaVip  │    │
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
 │         │                 │                 │                 │              │
 └─────────┼─────────────────┼─────────────────┼─────────────────┼─────────────┘
@@ -96,7 +101,9 @@ Initially attempted to use a single CloudAudit track with:
               │    ├── services/cvm.py           │
               │    ├── services/clb.py           │
               │    ├── services/cbs.py           │
-              │    └── services/eip.py           │
+              │    ├── services/eip.py           │
+              │    ├── services/eni.py           │
+              │    └── services/havip.py         │
               └──────────────────────────────────┘
 ```
 
@@ -135,19 +142,21 @@ Initially attempted to use a single CloudAudit track with:
 }
 ```
 
-#### Track 4: EIP Resources
+#### Track 4: VPC Resources (EIP, ENI, HAVIP)
 ```json
 {
-  "Name": "tagger-eip-track",
+  "Name": "tagger-vpc-track",
   "ResourceType": "vpc",
-  "EventNames": ["AllocateAddresses"],
+  "EventNames": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress"],
   "ActionType": "Write",
   "Storage": { "StorageType": "cos", "StorageName": "tommywork", "StorageRegion": "eu-frankfurt", "StoragePrefix": "cloudaudit" }
 }
 ```
 
-> **Important**: The CloudAudit track uses `ResourceType: "vpc"` but the Tag API QCS uses `qcs::cvm:...:eip/{id}`.
-> These service namespaces differ between CloudAudit and CAM/Tag — a known Tencent Cloud inconsistency.
+> **Important**: The CloudAudit track uses `ResourceType: "vpc"` for EIP, ENI, and HAVIP, but the Tag API QCS differs per resource:
+> - EIP: `qcs::cvm:...:eip/{id}` (CVM namespace — known Tencent Cloud inconsistency)
+> - ENI: `qcs::vpc:...:eni/{id}` (VPC namespace)
+> - HAVIP: `qcs::vpc:...:havip/{id}` (VPC namespace)
 
 ## Benefits
 
@@ -173,7 +182,7 @@ Initially attempted to use a single CloudAudit track with:
 
 ## Event Flow
 
-1. **Resource Creation**: User creates CVM/CLB/CBS/EIP in any region
+1. **Resource Creation**: User creates CVM/CLB/CBS/EIP/ENI/HAVIP in any region
 2. **CloudAudit Capture**: Appropriate track captures the event
 3. **COS Delivery**: Event delivered to shared COS bucket (2-6 min delay)
 4. **SCF Trigger**: COS ObjectCreated event triggers function
@@ -199,7 +208,7 @@ def build_nat_tags(owner: str) -> List[Dict[str, str]]:
         {"TagKey": "TaggerOwner",     "TagValue": owner or "unknown"},
         {"TagKey": "TaggerCreated",   "TagValue": today},
         {"TagKey": "TaggerCanDelete", "TagValue": "YES"},
-        {"TagKey": "TaggerTTL",       "TagValue": "7"},
+        {"TagKey": "TaggerTTL",       "TagValue": "3"},
         {"TagKey": "TaggerProject",   "TagValue": "n/a"},
     ]
 
@@ -239,7 +248,7 @@ if event_name == "CreateNatGateway":
 ### CloudAudit API Constraints
 1. **No Wildcard + EventNames**: Cannot use `ResourceType: "*"` with specific events
 2. **Required EventNames**: Cannot omit EventNames (empty list fails)
-3. **Service-Specific ResourceType**: Must use exact service identifier (e.g., `"cvm"`, `"clb"`, `"eip"`)
+3. **Service-Specific ResourceType**: Must use exact service identifier (e.g., `"cvm"`, `"clb"`, `"vpc"`)
 
 ### Operational Constraints
 1. **Track Limit**: Tencent Cloud may have maximum tracks per account (not documented)
@@ -265,8 +274,10 @@ Support ticket submitted to Tencent Cloud for clarification.
 8. **CloudAudit Region is Unreliable**: `eventRegion` and `eventSource` often point to the API gateway region, not the resource region — implement region discovery fallbacks
 9. **resourceId Can Be a List**: CloudAudit delivers `resourceId` as stringified Python lists (`"['eip-xxx']"`) — always unwrap before use
 10. **Tag API Fails Silently**: `TagResources` can return success with empty `FailedResources` even when the QCS service type is wrong — tags just don't appear
+11. **VPC Track Consolidation**: EIP, ENI, and HAVIP all use `ResourceType: "vpc"` in CloudAudit — consolidating into one VPC track avoids hitting track limits
 
-## Future Considerations
+12. **COS Delivers JSON Strings**: `requestParameters` and `responseElements` in COS-delivered CloudAudit files are JSON strings, not parsed dicts — always deserialize before `.get()` access
+13. **TransformAddress Masks Data**: CloudAudit masks `AddressId` as `***`, leaves `resourceSet` empty, and reports wrong region — use DescribeAddresses with instance-id filter across all regions to discover the EIP
 
 ### Potential Improvements
 1. **Move shared utils to `common.py`**: When all services are modularized, extract shared utils from `index.py` to a dedicated module
@@ -282,6 +293,6 @@ High-cost resources to prioritize:
 
 ---
 
-**Last Updated**: 2026-03-14  
-**Architecture Version**: 2.1.0  
-**Status**: Production (CVM/CDH/CLB/CBS/EIP fully operational)
+**Last Updated**: 2026-03-15  
+**Architecture Version**: 2.3.0  
+**Status**: Production (CVM/CDH/CLB/CBS/EIP/ENI/HAVIP fully operational, including TransformAddress)

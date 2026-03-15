@@ -26,7 +26,7 @@ def build_clb_tags(owner: str) -> List[Dict[str, str]]:
         {"TagKey": "TaggerOwner",     "TagValue": owner or "unknown"},
         {"TagKey": "TaggerCreated",   "TagValue": today},
         {"TagKey": "TaggerCanDelete", "TagValue": "YES"},
-        {"TagKey": "TaggerTTL",       "TagValue": "7"},
+        {"TagKey": "TaggerTTL",       "TagValue": "3"},
         {"TagKey": "TaggerProject",   "TagValue": "n/a"},
     ]
 

@@ -33,7 +33,7 @@ def build_cbs_tags(owner: str, disk_usage: str = "SYSTEM", linked_cvm: bool = Fa
         {"TagKey": "TaggerUsage",     "TagValue": disk_usage.upper()},
         {"TagKey": "TaggerLinkedCVM", "TagValue": "YES" if linked_cvm else "NO"},
         {"TagKey": "TaggerCanDelete", "TagValue": "YES"},
-        {"TagKey": "TaggerTTL",       "TagValue": "7"},
+        {"TagKey": "TaggerTTL",       "TagValue": "3"},
         {"TagKey": "TaggerProject",   "TagValue": cvm_project or "n/a"},
     ]
     return tags

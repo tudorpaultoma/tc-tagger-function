@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-03-15
+
+### Added
+- **TransformAddress Support**: Automatic tagging for EIPs created by converting a CVM public IP to Elastic IP
+  - Handles `TransformAddress` CloudAudit events alongside existing `AllocateAddresses`
+  - Discovers EIP via `DescribeAddresses` with `instance-id` filter (AddressId is masked as `***` by CloudAudit)
+  - Probes all 19 international regions to find the EIP (eventSource/eventRegion are unreliable for this event)
+  - Sets `TaggerLinkedResource` to the source CVM instance ID
+  - Added to VPC track: `["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress"]`
+
+### Fixed
+- **JSON String Parsing for COS Events**: COS-delivered CloudAudit events store `requestParameters` and `responseElements` as JSON strings, not dicts. Added `_safe_dict()` helper to transparently parse these fields. Previously caused `'str' object has no attribute 'get'` crash in the EIP handler.
+
+### Changed
+- **EIP Region Probing Order**: `eu-frankfurt` is now first in the fallback region list (most common deployment region), reducing probe latency
+- **Reduced EIP Logging**: Removed verbose per-region probe logs and debug dumps; kept only discovery success, warnings, and tagging result
+- **Version bump**: 2.2.0 → 2.3.0
+
+### Technical Details
+- CloudAudit TransformAddress quirks documented:
+  - `AddressId` in responseElements is always masked as `"***"`
+  - `resourceSet` is always empty
+  - `eventSource` reports `vpc.ap-singapore.api.tencentyun.com` regardless of actual resource region
+  - `eventRegion` is unreliable (often `ap-singapore` for non-Singapore resources)
+  - `requestParameters.Region` is sometimes present but not always
+- New function: `get_eip_by_instance_id(instance_id, region)` — queries DescribeAddresses with instance-id filter
+- `_safe_dict()` helper handles both dict and JSON-string inputs for requestParameters/responseElements
+- No new SDK dependencies required
+
+## [2.2.0] - 2026-03-14
+
+### Added
+- **ENI (Elastic Network Interface) Support**: Automatic tagging for network interfaces
+  - Handles `CreateNetworkInterface` CloudAudit events
+  - ENI-specific tag schema: `TaggerOwner`, `TaggerCreated`, `TaggerLinkedResource` (bound CVM or "NONE"), `TaggerCanDelete`, `TaggerTTL`, `TaggerProject`
+  - Queries VPC `DescribeNetworkInterfaces` API for attachment info
+  - Region discovery fallback (same pattern as EIP)
+  - resourceId list-unwrap for stringified Python lists
+  - QCS format: `qcs::vpc:{region}:uin/{uin}:eni/{eni_id}` (VPC namespace)
+
+- **HAVIP (High Availability Virtual IP) Support**: Automatic tagging for HA virtual IPs
+  - Handles `CreateHaVip` CloudAudit events
+  - HAVIP-specific tag schema: `TaggerOwner`, `TaggerCreated`, `TaggerSubnet`, `TaggerVpc`, `TaggerCanDelete`, `TaggerTTL`, `TaggerProject`
+  - Queries VPC `DescribeHaVips` API for subnet/VPC details
+  - Region discovery fallback
+  - resourceId list-unwrap for stringified Python lists
+  - QCS format: `qcs::vpc:{region}:uin/{uin}:havip/{havip_id}` (VPC namespace)
+
+### Changed
+- **EIP Track → VPC Track**: Renamed `tagger-eip-track` to `tagger-vpc-track`
+  - Consolidates EIP, ENI, and HAVIP events into a single VPC track
+  - All three services use `ResourceType: "vpc"` in CloudAudit
+  - Track now monitors: `AllocateAddresses`, `CreateNetworkInterface`, `CreateHaVip`
+  - Avoids hitting CloudAudit track limits by sharing one track for related VPC resources
+
+- **Default TTL reduced from 7 → 3 days** for all resource types
+  - Affects: CVM, CDH, CLB, CBS, EIP, ENI, HAVIP
+  - Shorter default gives faster cleanup of forgotten resources
+
+- **Version bump**: 2.1.0 → 2.2.0
+
+### Technical Details
+- ENI and HAVIP both use VPC SDK (`tencentcloud.vpc.v20170312`) — already included in package from EIP work
+- No new SDK dependencies required
+- 4 CloudAudit tracks total: CVM, CLB, CBS, VPC (was: CVM, CLB, CBS, EIP)
+- New IAM permissions needed: `vpc:DescribeNetworkInterfaces`, `vpc:DescribeHaVips`
+
 ## [2.1.0] - 2026-03-14
 
 ### Fixed

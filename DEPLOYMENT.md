@@ -1,17 +1,19 @@
 # SCF Resource Tagger - Deployment Guide
 
-## ✅ Status: **PRODUCTION (v2.1.0)**
+## ✅ Status: **PRODUCTION (v2.3.0)**
 
-The function supports CVM, CDH, CLB, CBS, and EIP auto-tagging across all regions.
+The function supports CVM, CDH, CLB, CBS, EIP (including TransformAddress), ENI, and HAVIP auto-tagging across all regions.
 
-## Current Version: v2.1.0
+## Current Version: v2.3.0
 
 ### What's Working
 - ✅ **CVM instances** - Auto-tagged via `RunInstances` events
 - ✅ **CDH hosts** - Auto-tagged via `AllocateHosts` events
 - ✅ **CLB load balancers** - Auto-tagged via `CreateLoadBalancer` events
 - ✅ **CBS disks** - Auto-tagged via `CreateCbsStorages`, `CreateDisks`, `AttachDisks` events
-- ✅ **EIP elastic IPs** - Auto-tagged via `AllocateAddresses` events (with region discovery)
+- ✅ **EIP elastic IPs** - Auto-tagged via `AllocateAddresses` and `TransformAddress` events (with region discovery)
+- ✅ **ENI network interfaces** - Auto-tagged via `CreateNetworkInterface` events (with region discovery)
+- ✅ **HAVIP virtual IPs** - Auto-tagged via `CreateHaVip` events (with VPC/subnet info)
 - ✅ **Global coverage** - CloudAudit tracks monitor ALL regions worldwide
 - ✅ **Cross-region delivery** - All logs from all regions deliver to your COS bucket
 
@@ -23,14 +25,14 @@ The function supports CVM, CDH, CLB, CBS, and EIP auto-tagging across all region
 - `TaggerAutoOff`: Default "YES" (for auto-shutdown scripts)
 - `TaggerAutoStart`: Default "NO" (requires manual start)
 - `TaggerCanDelete`: Default "YES" (for auto-deletion)
-- `TaggerTTL`: Default "7" (days before auto-deletion)
+- `TaggerTTL`: Default "3" (days before auto-deletion)
 - `TaggerProject`: Default "n/a"
 
 #### CLB Tags (Network Resources)
 - `TaggerOwner`: User who created the resource (email or username)
 - `TaggerCreated`: Creation date (ISO format)
 - `TaggerCanDelete`: Default "YES" (for auto-deletion)
-- `TaggerTTL`: Default "7" (days before auto-deletion)
+- `TaggerTTL`: Default "3" (days before auto-deletion)
 - `TaggerProject`: Default "n/a"
 
 #### CBS Disk Tags
@@ -39,7 +41,7 @@ The function supports CVM, CDH, CLB, CBS, and EIP auto-tagging across all region
 - `TaggerUsage`: Disk type ("SYSTEM" or "DATA")
 - `TaggerLinkedCVM`: Attachment status ("YES" or "NO")
 - `TaggerCanDelete`: Default "YES" (for auto-deletion)
-- `TaggerTTL`: Default "7" (days before auto-deletion)
+- `TaggerTTL`: Default "3" (days before auto-deletion)
 - `TaggerProject`: Copied from CVM if attached, "n/a" if unattached
 
 #### EIP Tags (Elastic IP)
@@ -48,7 +50,24 @@ The function supports CVM, CDH, CLB, CBS, and EIP auto-tagging across all region
 - `TaggerType`: EIP type (EIP, AnycastEIP, HighQualityEIP, AntiDDoSEIP)
 - `TaggerLinkedResource`: Bound instance ID or "NONE"
 - `TaggerCanDelete`: Default "YES" (for auto-deletion)
-- `TaggerTTL`: Default "7" (days before auto-deletion)
+- `TaggerTTL`: Default "3" (days before auto-deletion)
+- `TaggerProject`: Default "n/a"
+
+#### ENI Tags (Elastic Network Interface)
+- `TaggerOwner`: ENI creator (email or username)
+- `TaggerCreated`: Creation date (ISO format)
+- `TaggerLinkedResource`: Bound CVM instance ID or "NONE"
+- `TaggerCanDelete`: Default "YES" (for auto-deletion)
+- `TaggerTTL`: Default "3" (days before auto-deletion)
+- `TaggerProject`: Default "n/a"
+
+#### HAVIP Tags (High Availability Virtual IP)
+- `TaggerOwner`: HAVIP creator (email or username)
+- `TaggerCreated`: Creation date (ISO format)
+- `TaggerSubnet`: Subnet ID the HAVIP belongs to
+- `TaggerVpc`: VPC ID the HAVIP belongs to
+- `TaggerCanDelete`: Default "YES" (for auto-deletion)
+- `TaggerTTL`: Default "3" (days before auto-deletion)
 - `TaggerProject`: Default "n/a"
 
 ## Deployment Configuration
@@ -94,10 +113,10 @@ The function automatically creates/updates separate CloudAudit tracks per servic
 - **Events**: `*` (all CBS write events)
 - **Coverage**: All Tencent Cloud regions automatically
 
-### Track 4: EIP Resources
-- **Name**: `tagger-eip-track`
+### Track 4: VPC Resources (EIP, ENI, HAVIP)
+- **Name**: `tagger-vpc-track`
 - **ResourceType**: `vpc`
-- **Events**: `AllocateAddresses`
+- **Events**: `AllocateAddresses`, `CreateNetworkInterface`, `CreateHaVip`, `TransformAddress`
 - **Coverage**: All Tencent Cloud regions automatically
 
 ### Common Settings
@@ -107,7 +126,7 @@ The function automatically creates/updates separate CloudAudit tracks per servic
 
 ## Test Results
 
-### Latest Test (v2.1.0)
+### Latest Test (v2.2.0)
 ```json
 {
   "status": "ok",
@@ -123,7 +142,7 @@ The function automatically creates/updates separate CloudAudit tracks per servic
 ```
 
 ### Performance
-- **Duration**: ~7-8 seconds (with EIP region discovery)
+- **Duration**: ~7-8 seconds (with region discovery)
 - **Memory**: ~120 MB peak
 - **Cold Start**: ~800ms
 
@@ -132,7 +151,9 @@ The function automatically creates/updates separate CloudAudit tracks per servic
 - ✅ CDH hosts in all regions
 - ✅ CLB load balancers
 - ✅ CBS disks (system + data, standalone + attached)
-- ✅ EIP elastic IPs (with region discovery fallback)
+- ✅ EIP elastic IPs (with region discovery fallback, including TransformAddress)
+- ✅ ENI network interfaces (with region discovery fallback)
+- ✅ HAVIP virtual IPs (with VPC/subnet info)
 
 ## Next Steps
 
@@ -165,6 +186,20 @@ Upload the new deployment package:
 3. **Re-attachment**: Detach disk and attach to different CVM
    - Verify project tag updates from new CVM
 
+#### ENI Testing
+1. **Standalone ENI**: Create an ENI in any VPC subnet
+   - Wait 5-10 minutes for CloudAudit to propagate
+   - Verify tags: `TaggerLinkedResource=NONE`
+   
+2. **CVM-attached ENI**: Create a CVM (which auto-creates an ENI)
+   - The `CreateNetworkInterface` event fires separately
+   - Verify tags: `TaggerLinkedResource=ins-xxx`
+
+#### HAVIP Testing
+1. Create a HAVIP in any VPC subnet
+2. Wait 5-10 minutes for CloudAudit to propagate
+3. Verify tags: `TaggerSubnet=subnet-xxx`, `TaggerVpc=vpc-xxx`
+
 ### 3. Monitor
 - Check SCF logs regularly
 - Monitor `errors` field in function output
@@ -189,11 +224,13 @@ Upload the new deployment package:
 
 ## Files
 
-- `index.py` - Main handler + shared utilities + event routing (v2.1.0)
+- `index.py` - Main handler + shared utilities + event routing (v2.3.0)
 - `services/cvm.py` - CVM/CDH tagging + attached disk tagging
 - `services/clb.py` - CLB tagging
 - `services/cbs.py` - CBS disk tagging
-- `services/eip.py` - EIP tagging with region discovery
+- `services/eip.py` - EIP tagging (AllocateAddresses, TransformAddress) with region discovery
+- `services/eni.py` - ENI tagging with region discovery
+- `services/havip.py` - HAVIP tagging with VPC/subnet info
 - `deploy.sh` - Deployment package builder
 - `scf-tagger.zip` - Ready-to-deploy package
 - `requirements.txt` - Python dependencies

@@ -10,12 +10,14 @@ Supported services:
 - CDH dedicated hosts (AllocateHosts)
 - CLB load balancers (CreateLoadBalancer)
 - CBS disks (CreateCbsStorages, CreateDisks, AttachDisks)
-- EIP elastic IPs (AllocateAddresses)
+- EIP elastic IPs (AllocateAddresses, TransformAddress)
+- ENI elastic network interfaces (CreateNetworkInterface)
+- HAVIP high availability virtual IPs (CreateHaVip)
 
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 2.1.0
+Version: 2.3.0
 License: Apache 2.0
 """
 
@@ -51,6 +53,8 @@ from services.cvm import handle_cvm_tagging, should_tag
 from services.clb import handle_clb_tagging
 from services.cbs import handle_cbs_tagging
 from services.eip import handle_eip_tagging
+from services.eni import handle_eni_tagging
+from services.havip import handle_havip_tagging
 
 # Configuration from environment variables
 COS_BUCKET       = os.getenv("COS_BUCKET")
@@ -316,7 +320,7 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         - Track 1 (tagger-cvm-track): ResourceType="cvm" → RunInstances, AllocateHosts
         - Track 2 (tagger-clb-track): ResourceType="clb" → CreateLoadBalancer
         - Track 3 (tagger-cbs-track): ResourceType="cbs" → ["*"] (all CBS write events)
-        - Track 4 (tagger-eip-track): ResourceType="eip" → AllocateAddresses
+        - Track 4 (tagger-vpc-track): ResourceType="vpc" → AllocateAddresses, CreateNetworkInterface, CreateHaVip, TransformAddress
         - All tracks deliver to same COS bucket → single SCF function processes all events
     """
     if not bucket_region or not bucket:
@@ -334,7 +338,7 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         {"name": "tagger-cvm-track", "resource_type": "cvm", "event_names": ["RunInstances", "AllocateHosts"]},
         {"name": "tagger-clb-track", "resource_type": "clb", "event_names": ["CreateLoadBalancer"]},
         {"name": "tagger-cbs-track", "resource_type": "cbs", "event_names": ["*"]},
-        {"name": "tagger-eip-track", "resource_type": "vpc", "event_names": ["AllocateAddresses"]},
+        {"name": "tagger-vpc-track", "resource_type": "vpc", "event_names": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress"]},
     ]
 
     # Prepare storage config
@@ -497,8 +501,20 @@ def main_handler(event, context):
                 event_name = rec.get("eventName", "")
 
                 # --- EIP events ---
-                if event_name == "AllocateAddresses":
+                if event_name in ("AllocateAddresses", "TransformAddress"):
                     if handle_eip_tagging(rec):
+                        tagged += 1
+                    continue
+
+                # --- ENI events ---
+                if event_name == "CreateNetworkInterface":
+                    if handle_eni_tagging(rec):
+                        tagged += 1
+                    continue
+
+                # --- HAVIP events ---
+                if event_name == "CreateHaVip":
+                    if handle_havip_tagging(rec):
                         tagged += 1
                     continue
 
