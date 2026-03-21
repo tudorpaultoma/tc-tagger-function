@@ -10,14 +10,19 @@ Supported services:
 - CDH dedicated hosts (AllocateHosts)
 - CLB load balancers (CreateLoadBalancer)
 - CBS disks (CreateCbsStorages, CreateDisks, AttachDisks)
+- CBS snapshots (CreateSnapshot)
 - EIP elastic IPs (AllocateAddresses, TransformAddress)
 - ENI elastic network interfaces (CreateNetworkInterface)
 - HAVIP high availability virtual IPs (CreateHaVip)
+- NAT Gateway — public (CreateNatGateway) and private (CreatePrivateNatGateway)
+- TKE clusters (CreateCluster)
+- Auto Scaling groups (CreateAutoScalingGroup)
+- Auto Scaling launch configurations (CreateLaunchConfiguration)
 
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 2.3.0
+Version: 3.0.0
 License: Apache 2.0
 """
 
@@ -55,6 +60,10 @@ from services.cbs import handle_cbs_tagging
 from services.eip import handle_eip_tagging
 from services.eni import handle_eni_tagging
 from services.havip import handle_havip_tagging
+from services.nat import handle_nat_tagging
+from services.snapshot import handle_snapshot_tagging
+from services.tke import handle_tke_tagging
+from services.autoscaling import handle_asg_tagging, handle_lc_tagging
 
 # Configuration from environment variables
 COS_BUCKET       = os.getenv("COS_BUCKET")
@@ -319,9 +328,15 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
     Architecture:
         - Track 1 (tagger-cvm-track): ResourceType="cvm" → RunInstances, AllocateHosts
         - Track 2 (tagger-clb-track): ResourceType="clb" → CreateLoadBalancer
-        - Track 3 (tagger-cbs-track): ResourceType="cbs" → ["*"] (all CBS write events)
-        - Track 4 (tagger-vpc-track): ResourceType="vpc" → AllocateAddresses, CreateNetworkInterface, CreateHaVip, TransformAddress
+        - Track 3 (tagger-cbs-track): ResourceType="cbs" → ["*"] (all CBS write events incl. CreateSnapshot)
+        - Track 4 (tagger-vpc-track): ResourceType="vpc" → AllocateAddresses, CreateNetworkInterface, CreateHaVip, TransformAddress, CreateNatGateway, CreatePrivateNatGateway
+        - Track 5 (tagger-tke-track): ResourceType="tke" → CreateCluster
+        - Track 6 (tagger-as-track):  ResourceType="as"  → CreateAutoScalingGroup, CreateLaunchConfiguration
         - All tracks deliver to same COS bucket → single SCF function processes all events
+        
+        Note: EIPs auto-allocated by NAT Gateway creation fire AllocateAddresses
+        under resourceType "cvm" with empty params (untrackable). These EIPs are
+        instead tagged by the NAT handler via DescribeNatGateways → PublicIpAddressSet.
     """
     if not bucket_region or not bucket:
         print(json.dumps({"step": "audit_track", "error": "missing bucket_region or bucket"}))
@@ -338,7 +353,9 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         {"name": "tagger-cvm-track", "resource_type": "cvm", "event_names": ["RunInstances", "AllocateHosts"]},
         {"name": "tagger-clb-track", "resource_type": "clb", "event_names": ["CreateLoadBalancer"]},
         {"name": "tagger-cbs-track", "resource_type": "cbs", "event_names": ["*"]},
-        {"name": "tagger-vpc-track", "resource_type": "vpc", "event_names": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress"]},
+        {"name": "tagger-vpc-track", "resource_type": "vpc", "event_names": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress", "CreateNatGateway", "CreatePrivateNatGateway"]},
+        {"name": "tagger-tke-track", "resource_type": "tke", "event_names": ["CreateCluster"]},
+        {"name": "tagger-as-track",  "resource_type": "as",  "event_names": ["CreateAutoScalingGroup", "CreateLaunchConfiguration"]},
     ]
 
     # Prepare storage config
@@ -371,33 +388,48 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         return None
 
     def _ensure_track(track_name, resource_type, event_names):
-        """Create or validate a single track. Returns track_id or None."""
+        """Create or update a single track. Returns track_id or None."""
         tr = _find_track(existing_tracks, track_name)
         track_id = getattr(tr, "TrackId", None) if tr else None
-        track_valid = False
 
         if tr:
             track_status = getattr(tr, "Status", 0)
             track_rt = getattr(tr, "ResourceType", "")
             track_evts = sorted(getattr(tr, "EventNames", []) or [])
-            # Also verify the storage prefix matches
             track_storage = getattr(tr, "Storage", None)
             track_prefix = getattr(track_storage, "StoragePrefix", "") if track_storage else ""
             expected_prefix = prefix_base
             prefix_ok = (track_prefix == expected_prefix)
+
             if track_status == 1 and track_rt == resource_type and track_evts == sorted(event_names) and prefix_ok:
                 print(json.dumps({"step": track_name, "status": "exists", "track_id": track_id,
-                                  "action": "skip_recreation", "event_names": track_evts,
+                                  "action": "skip", "event_names": track_evts,
                                   "prefix": track_prefix}))
-                track_valid = True
-            else:
-                print(json.dumps({"step": track_name, "status": "needs_update", "track_id": track_id,
-                                  "current_status": track_status, "current_rt": track_rt,
-                                  "current_events": track_evts, "current_prefix": track_prefix,
-                                  "desired_events": sorted(event_names), "desired_prefix": expected_prefix}))
+                return track_id
 
-        if not track_valid:
-            if track_id:
+            # Track exists but needs updating — use ModifyAuditTrack (no gap)
+            print(json.dumps({"step": track_name, "status": "needs_update", "track_id": track_id,
+                              "current_status": track_status, "current_rt": track_rt,
+                              "current_events": track_evts, "current_prefix": track_prefix,
+                              "desired_events": sorted(event_names), "desired_prefix": expected_prefix}))
+            try:
+                mreq = audit_models.ModifyAuditTrackRequest()
+                setattr(mreq, "TrackId", track_id)
+                setattr(mreq, "Name", track_name)
+                setattr(mreq, "Status", 1)
+                setattr(mreq, "ActionType", "Write")
+                setattr(mreq, "ResourceType", resource_type)
+                setattr(mreq, "EventNames", event_names)
+                setattr(mreq, "Storage", storage)
+                client.ModifyAuditTrack(mreq)
+                print(json.dumps({"step": track_name, "status": "updated", "track_id": track_id,
+                                  "resource_type": resource_type, "events": event_names}))
+                return track_id
+            except Exception as mod_err:
+                print(json.dumps({"warning": f"modify_{track_name}_failed",
+                                  "track_id": track_id, "message": str(mod_err),
+                                  "note": "falling back to delete+create"}))
+                # Fallback: delete + create
                 try:
                     delreq = audit_models.DeleteAuditTrackRequest()
                     setattr(delreq, "TrackId", track_id)
@@ -405,25 +437,27 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
                     print(json.dumps({"step": track_name, "status": "deleted", "track_id": track_id}))
                 except Exception as del_err:
                     print(json.dumps({"warning": f"delete_{track_name}_failed", "error": str(del_err)}))
-
-            try:
-                print(json.dumps({"debug": f"create_{track_name}", "resource_type": resource_type, "event_names": event_names}))
-                creq = audit_models.CreateAuditTrackRequest()
-                setattr(creq, "Name", track_name)
-                setattr(creq, "Status", 1)
-                setattr(creq, "ActionType", "Write")
-                setattr(creq, "ResourceType", resource_type)
-                setattr(creq, "EventNames", event_names)
-                setattr(creq, "Storage", storage)
-                cresp = client.CreateAuditTrack(creq)
-                track_id = getattr(cresp, "TrackId", None)
-                print(json.dumps({"step": track_name, "status": "created", "track_id": track_id,
-                                  "resource_type": resource_type, "events": event_names}))
-            except Exception as create_err:
-                print(json.dumps({"error": f"create_{track_name}_failed",
-                                  "resource_type": resource_type, "event_names": event_names,
-                                  "message": str(create_err), "traceback": traceback.format_exc()}))
                 track_id = None
+
+        # Track does not exist — create it
+        try:
+            print(json.dumps({"debug": f"create_{track_name}", "resource_type": resource_type, "event_names": event_names}))
+            creq = audit_models.CreateAuditTrackRequest()
+            setattr(creq, "Name", track_name)
+            setattr(creq, "Status", 1)
+            setattr(creq, "ActionType", "Write")
+            setattr(creq, "ResourceType", resource_type)
+            setattr(creq, "EventNames", event_names)
+            setattr(creq, "Storage", storage)
+            cresp = client.CreateAuditTrack(creq)
+            track_id = getattr(cresp, "TrackId", None)
+            print(json.dumps({"step": track_name, "status": "created", "track_id": track_id,
+                              "resource_type": resource_type, "events": event_names}))
+        except Exception as create_err:
+            print(json.dumps({"error": f"create_{track_name}_failed",
+                              "resource_type": resource_type, "event_names": event_names,
+                              "message": str(create_err), "traceback": traceback.format_exc()}))
+            track_id = None
 
         return track_id
 
@@ -518,6 +552,12 @@ def main_handler(event, context):
                         tagged += 1
                     continue
 
+                # --- NAT Gateway events (public + private) ---
+                if event_name in ("CreateNatGateway", "CreatePrivateNatGateway"):
+                    if handle_nat_tagging(rec):
+                        tagged += 1
+                    continue
+
                 # --- CLB events ---
                 if event_name == "CreateLoadBalancer":
                     if handle_clb_tagging(rec):
@@ -527,6 +567,29 @@ def main_handler(event, context):
                 # --- CBS events ---
                 if event_name in ("CreateCbsStorages", "CreateDisks", "AttachDisks"):
                     if handle_cbs_tagging(rec):
+                        tagged += 1
+                    continue
+
+                # --- CBS Snapshot events ---
+                if event_name == "CreateSnapshot":
+                    if handle_snapshot_tagging(rec):
+                        tagged += 1
+                    continue
+
+                # --- TKE events ---
+                if event_name == "CreateCluster":
+                    if handle_tke_tagging(rec):
+                        tagged += 1
+                    continue
+
+                # --- Auto Scaling events ---
+                if event_name == "CreateAutoScalingGroup":
+                    if handle_asg_tagging(rec):
+                        tagged += 1
+                    continue
+
+                if event_name == "CreateLaunchConfiguration":
+                    if handle_lc_tagging(rec):
                         tagged += 1
                     continue
 

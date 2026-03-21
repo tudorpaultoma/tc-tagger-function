@@ -10,6 +10,27 @@
       "resource": [
         "*"
       ]
+    },
+    {
+      "effect": "allow",
+      "action": [
+        "cvm:DescribeInstances",
+        "cvm:DescribeSnapshots",
+        "cvm:DescribeAddresses",
+        "vpc:DescribeNatGateways",
+        "vpc:DescribePrivateNatGateways",
+        "vpc:DescribeNetworkInterfaces",
+        "vpc:DescribeHaVips",
+        "clb:DescribeLoadBalancers",
+        "cbs:DescribeDiskStorages",
+        "cbs:DescribeDisks",
+        "tke:DescribeClusters",
+        "as:DescribeAutoScalingGroups",
+        "as:DescribeLaunchConfigurations"
+      ],
+      "resource": [
+        "*"
+      ]
     }
   ]
 }

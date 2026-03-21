@@ -184,9 +184,13 @@ def _extract_region_from_params(rec: Dict[str, Any]) -> Optional[str]:
 def should_tag(rec: Dict[str, Any]) -> bool:
     """
     Decide if an event is a CVM/CDH resource creation we want to tag.
+
+    Only match genuine CVM/CDH creation events. All other services
+    (CBS, snapshot, NAT, TKE, AS, etc.) are handled by dedicated
+    handlers earlier in the routing chain.
     """
     op = (rec.get("eventName") or rec.get("operationName") or rec.get("action") or "").lower()
-    return ("create" in op) or (op in ("runinstances", "createinstance", "createcluster", "allocatehosts"))
+    return op in ("runinstances", "createinstance", "allocatehosts")
 
 
 def wait_for_cvm_running(instance_id: str, region: str, max_wait: int = 120, poll_interval: int = 10) -> str:

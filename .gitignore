@@ -27,6 +27,7 @@ wheels/
 package/
 scf-tagger.zip
 *.zip
+_deps/
 
 # IDE
 .vscode/
