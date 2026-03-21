@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-03-21
+
+### Added
+- **Private NAT Gateway Support**: Automatic tagging for private NAT Gateways (`CreatePrivateNatGateway`)
+  - ID prefix: `intranat-` (vs `nat-` for public)
+  - `resourceSet` is empty; ID extracted from `responseElements.PrivateNatGatewaySet`
+  - Queries `DescribePrivateNatGateways` API for details
+  - QCS format: `qcs::vpc:{region}:uin/{uin}:intranat/{intranat_id}`
+  - No EIPs involved (private NAT is VPC-to-VPC / VPC-to-CCN only)
+
+- **CBS Snapshot Support**: Automatic tagging for CBS snapshots (`CreateSnapshot`)
+  - New service module: `services/snapshot.py`
+  - Queries `DescribeSnapshots` for source disk ID and disk usage type
+  - Snapshot-specific tags: `TaggerSourceDisk`, `TaggerDiskUsage` (plus standard 5)
+  - QCS format: `qcs::cvm:{region}:uin/{uin}:snapshot/{snap_id}` (CVM namespace)
+  - Captured by existing CBS track wildcard (`["*"]`)
+
+- **TKE Cluster Support**: Automatic tagging for TKE Kubernetes clusters (`CreateCluster`)
+  - New service module: `services/tke.py`
+  - Queries `DescribeClusters` for cluster name, type, status, node count, K8s version
+  - New CloudAudit track: `tagger-tke-track` (`ResourceType="tke"`)
+  - QCS format: `qcs::tke:{region}:uin/{uin}:cluster/{cluster_id}`
+
+- **Auto Scaling Support**: Automatic tagging for AS resources
+  - New service module: `services/autoscaling.py`
+  - Scaling groups (`CreateAutoScalingGroup`, ID prefix: `asg-`)
+  - Launch configurations (`CreateLaunchConfiguration`, ID prefix: `asc-`)
+  - Queries `DescribeAutoScalingGroups` and `DescribeLaunchConfigurations` for details
+  - New CloudAudit track: `tagger-as-track` (`ResourceType="as"`)
+  - QCS formats:
+    - `qcs::as:{region}:uin/{uin}:auto-scaling-group/{asg_id}`
+    - `qcs::as:{region}:uin/{uin}:launch-configuration/{asc_id}`
+
+- **Public NAT Gateway Support**: Automatic tagging for public NAT Gateways (`CreateNatGateway`)
+  - New service module: `services/nat.py`
+  - Queries `DescribeNatGateways` for details + `PublicIpAddressSet` for EIP auto-tagging
+  - QCS format: `qcs::vpc:{region}:uin/{uin}:nat/{nat_id}`
+  - Auto-tags EIPs allocated by NAT creation (untrackable via normal EIP handler)
+
+### Changed
+- **NAT Gateway Tags**: Removed `TaggerVpc` tag — NAT Gateways now get 5 tags (TaggerOwner, TaggerCreated, TaggerCanDelete, TaggerTTL, TaggerProject)
+- **VPC Track Updated**: Added `CreateNatGateway` and `CreatePrivateNatGateway` to `tagger-vpc-track` event names
+- **CloudAudit Tracks**: Now 6 tracks total (CVM, CLB, CBS, VPC, TKE, AS)
+- **Version bump**: 3.0.0 → 3.1.0
+
+### IAM Requirements
+- New permissions needed:
+  - `vpc:DescribeNatGateways` (public NAT info)
+  - `vpc:DescribePrivateNatGateways` (private NAT info)
+  - `cvm:DescribeSnapshots` (snapshot source disk info)
+  - `tke:DescribeClusters` (TKE cluster info)
+  - `as:DescribeAutoScalingGroups` (scaling group info)
+  - `as:DescribeLaunchConfigurations` (launch config info)
+
 ## [2.3.0] - 2026-03-15
 
 ### Added

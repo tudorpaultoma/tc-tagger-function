@@ -45,10 +45,42 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 - **VPC/Subnet Info**: Queries VPC API for subnet and VPC details
 - **QCS format**: `qcs::vpc:{region}:uin/{uin}:havip/{havip_id}` (uses `vpc` service namespace)
 
+### 🌐 **NAT Gateway (Public + Private)** ✅
+- **Public NAT Gateway** - `CreateNatGateway` events (ID prefix: `nat-`)
+- **Private NAT Gateway** - `CreatePrivateNatGateway` events (ID prefix: `intranat-`)
+- **EIP Auto-Tagging**: Public NAT auto-allocates EIPs — NAT handler discovers and tags them via `DescribeNatGateways` → `PublicIpAddressSet`
+- **Private NAT**: Used for VPC-to-VPC / VPC-to-CCN traffic, no EIPs involved. Queried via `DescribePrivateNatGateways`
+- **Region Discovery**: Probes candidate regions when CloudAudit reports wrong region
+- **QCS formats**:
+  - Public: `qcs::vpc:{region}:uin/{uin}:nat/{nat_id}`
+  - Private: `qcs::vpc:{region}:uin/{uin}:intranat/{intranat_id}`
+
+### 📸 **CBS Snapshot** ✅
+- **Snapshots** - `CreateSnapshot` events
+- **Source Disk Info**: Queries `DescribeSnapshots` for source disk ID and usage type
+- **Captured by CBS Track**: Snapshot events fire under `ResourceType="cbs"` (wildcard track)
+- **QCS format**: `qcs::cvm:{region}:uin/{uin}:snapshot/{snap_id}` (uses `cvm` service namespace)
+
+### ☸️ **TKE (Tencent Kubernetes Engine)** ✅
+- **Clusters** - `CreateCluster` events
+- **Cluster Details**: Queries `DescribeClusters` for name, type, status, node count, K8s version
+- **Dedicated Track**: `tagger-tke-track` with `ResourceType="tke"`
+- **QCS format**: `qcs::tke:{region}:uin/{uin}:cluster/{cluster_id}`
+
+### 📈 **Auto Scaling (AS)** ✅
+- **Scaling Groups** - `CreateAutoScalingGroup` events (ID prefix: `asg-`)
+- **Launch Configurations** - `CreateLaunchConfiguration` events (ID prefix: `asc-`)
+- **Group Details**: Queries `DescribeAutoScalingGroups` for VPC, capacity settings, linked launch config
+- **Config Details**: Queries `DescribeLaunchConfigurations` for instance type, image
+- **Dedicated Track**: `tagger-as-track` with `ResourceType="as"`
+- **QCS formats**:
+  - Scaling group: `qcs::as:{region}:uin/{uin}:auto-scaling-group/{asg_id}`
+  - Launch config: `qcs::as:{region}:uin/{uin}:launch-configuration/{asc_id}`
+
 ## Features
 
 - **Global Multi-Region Support**: Automatically monitors and tags resources across ALL Tencent Cloud regions
-- **Multi-Resource Support**: Tags CVM instances, CDH hosts, CLB load balancers, CBS disks, EIPs, ENIs, and HAVIPs automatically
+- **Multi-Resource Support**: Tags CVM instances, CDH hosts, CLB load balancers, CBS disks, CBS snapshots, EIPs, ENIs, HAVIPs, NAT Gateways (public + private), TKE clusters, and Auto Scaling groups/launch configs automatically
 - **Automatic Tagging**: Tags resources immediately after creation
 - **CloudAudit Integration**: Separate CloudAudit tracks per service type for reliable event delivery
 - **Flexible Owner Detection**: Prioritizes email, username, account ID, or UIN for owner identification
@@ -143,6 +175,56 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 **Note**: HAVIP uses `qcs::vpc:region:uin/xxx:havip/havip-id` format for Tag API (VPC service namespace).
 
+### NAT Gateway Tags (Public + Private)
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCreated` | Creation date | `2026-03-21` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
+
+**Note**: Public NAT uses `qcs::vpc:region:uin/xxx:nat/nat-id`, private NAT uses `qcs::vpc:region:uin/xxx:intranat/intranat-id`. EIPs auto-allocated by public NAT are also tagged by the NAT handler.
+
+### CBS Snapshot Tags
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCreated` | Creation date | `2026-03-21` |
+| `TaggerDiskUsage` | Source disk type | `SYSTEM_DISK` or `DATA_DISK` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerSourceDisk` | Source disk ID the snapshot was created from | `disk-abc123` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
+
+**Note**: Snapshot uses `qcs::cvm:region:uin/xxx:snapshot/snap-id` format for Tag API (CVM service namespace).
+
+### TKE Cluster Tags
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCreated` | Creation date | `2026-03-21` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
+
+**Note**: TKE uses `qcs::tke:region:uin/xxx:cluster/cls-id` format for Tag API.
+
+### Auto Scaling Tags (Scaling Group + Launch Config)
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCreated` | Creation date | `2026-03-21` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
+
+**Note**: Scaling group uses `qcs::as:region:uin/xxx:auto-scaling-group/asg-id`, launch config uses `qcs::as:region:uin/xxx:launch-configuration/asc-id`.
+
 ## Architecture
 
 ```
@@ -154,8 +236,10 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 2. **COS** stores audit logs in structured format  
 3. **SCF** processes new log files via COS triggers
 4. **Tag API** applies standardized tags to resources
-5. **CBS API** queries disks attached to CVM instances for automatic disk tagging
-6. **VPC API** queries ENI attachment info, HAVIP subnet/VPC details, and EIP status
+5. **CBS API** queries disks attached to CVM instances for automatic disk tagging, and snapshot source disk info
+6. **VPC API** queries ENI attachment info, HAVIP subnet/VPC details, EIP status, and NAT Gateway details
+7. **TKE API** queries cluster details (name, type, status, node count, K8s version)
+8. **AS API** queries scaling group capacity settings and launch configuration details
 
 **Note**: CloudAudit tracks are global by default - a single track monitors all regions automatically.
 
@@ -166,10 +250,16 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 - `CreateCbsStorages` - CBS standalone disk creation ✅
 - `CreateDisks` - CBS standalone disk creation (pay-as-you-go) ✅
 - `AttachDisks` - CBS disk attachment to CVM ✅
+- `CreateSnapshot` - CBS snapshot creation ✅
 - `AllocateAddresses` - EIP elastic IP allocation ✅
 - `TransformAddress` - Public IP → EIP conversion ✅
 - `CreateNetworkInterface` - ENI elastic network interface creation ✅
 - `CreateHaVip` - HAVIP high availability virtual IP creation ✅
+- `CreateNatGateway` - Public NAT Gateway creation (+ auto-tag associated EIPs) ✅
+- `CreatePrivateNatGateway` - Private NAT Gateway creation ✅
+- `CreateCluster` - TKE Kubernetes cluster creation ✅
+- `CreateAutoScalingGroup` - Auto Scaling group creation ✅
+- `CreateLaunchConfiguration` - Auto Scaling launch configuration creation ✅
 
 ## Prerequisites
 
@@ -301,9 +391,9 @@ Attach the following policies to your SCF execution role:
 }
 ```
 
-#### VPC Resource Policy (Required for ENI and HAVIP info)
+#### VPC Resource Policy (Required for ENI, HAVIP, and NAT Gateway info)
 
-> **Note**: ENI and HAVIP queries use the `vpc` service namespace.
+> **Note**: ENI, HAVIP, and NAT Gateway queries use the `vpc` service namespace.
 
 ```json
 {
@@ -311,7 +401,52 @@ Attach the following policies to your SCF execution role:
   "statement": [
     {
       "effect": "allow",
-      "action": ["vpc:DescribeNetworkInterfaces", "vpc:DescribeHaVips"],
+      "action": ["vpc:DescribeNetworkInterfaces", "vpc:DescribeHaVips", "vpc:DescribeNatGateways", "vpc:DescribePrivateNatGateways"],
+      "resource": ["*"]
+    }
+  ]
+}
+```
+
+#### CBS Snapshot Policy (Required for snapshot source disk info)
+
+```json
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": ["cvm:DescribeSnapshots"],
+      "resource": ["*"]
+    }
+  ]
+}
+```
+
+#### TKE Resource Policy (Required for cluster info)
+
+```json
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": ["tke:DescribeClusters"],
+      "resource": ["*"]
+    }
+  ]
+}
+```
+
+#### AS Resource Policy (Required for scaling group and launch config info)
+
+```json
+{
+  "version": "2.0",
+  "statement": [
+    {
+      "effect": "allow",
+      "action": ["as:DescribeAutoScalingGroups", "as:DescribeLaunchConfigurations"],
       "resource": ["*"]
     }
   ]
@@ -349,9 +484,19 @@ The function automatically configures CloudAudit tracks per service type:
 - **Monitors**: CBS disk creation and attachment
 
 #### Track 4: VPC Track (`tagger-vpc-track`)
-- **Events**: `AllocateAddresses`, `CreateNetworkInterface`, `CreateHaVip`, `TransformAddress`
+- **Events**: `AllocateAddresses`, `CreateNetworkInterface`, `CreateHaVip`, `TransformAddress`, `CreateNatGateway`, `CreatePrivateNatGateway`
 - **ResourceType**: `vpc`
-- **Monitors**: EIP allocation, EIP conversion, ENI creation, HAVIP creation
+- **Monitors**: EIP allocation, EIP conversion, ENI creation, HAVIP creation, NAT Gateway creation (public + private)
+
+#### Track 5: TKE Track (`tagger-tke-track`)
+- **Events**: `CreateCluster`
+- **ResourceType**: `tke`
+- **Monitors**: TKE Kubernetes cluster creation
+
+#### Track 6: AS Track (`tagger-as-track`)
+- **Events**: `CreateAutoScalingGroup`, `CreateLaunchConfiguration`
+- **ResourceType**: `as`
+- **Monitors**: Auto Scaling group and launch configuration creation
 
 **Storage**: All tracks deliver logs to the COS bucket specified in `COS_BUCKET`/`COS_REGION`
 
@@ -388,7 +533,7 @@ CBS disks are tagged using two strategies:
 
 Once deployed and configured, the function operates automatically:
 
-1. Create a new CVM instance, CDH host, CLB load balancer, CBS disk, EIP, ENI, or HAVIP in any region
+1. Create a new CVM instance, CDH host, CLB load balancer, CBS disk, CBS snapshot, EIP, ENI, HAVIP, NAT Gateway, TKE cluster, or Auto Scaling group in any region
 2. CloudAudit captures the creation event
 3. Event is stored in COS bucket
 4. SCF function is triggered by new COS object
@@ -461,7 +606,11 @@ scf-tagger/
 │   ├── cbs.py                  # CBS disk tagging
 │   ├── eip.py                  # EIP tagging (AllocateAddresses, TransformAddress)
 │   ├── eni.py                  # ENI tagging with region discovery
-│   └── havip.py                # HAVIP tagging with VPC/subnet info
+│   ├── havip.py                # HAVIP tagging with VPC/subnet info
+│   ├── nat.py                  # NAT Gateway tagging (public + private) + EIP auto-tag
+│   ├── snapshot.py             # CBS snapshot tagging with source disk info
+│   ├── tke.py                  # TKE cluster tagging
+│   └── autoscaling.py          # Auto Scaling group + launch config tagging
 ├── requirements.txt            # Python dependencies
 ├── policies/                   # IAM policy templates
 │   ├── cos-policy.json
@@ -499,24 +648,22 @@ The architecture uses **separate CloudAudit tracks per service type**. To add su
 
 1. **Add CloudAudit Track** (in `ensure_audit_track_to_cos()`):
    ```python
-   # Example: Adding NAT Gateway support
-   nat_track_name = "tagger-nat-track"
-   nat_event_names = ["CreateNatGateway"]
-   # ... create track with ResourceType="vpc" ...
+   # Example: Adding a new service
+   {"name": "tagger-xxx-track", "resource_type": "xxx", "event_names": ["CreateXxx"]}
    ```
 
 2. **Add Event Handler** (in `main_handler()`):
    ```python
-   if event_name == "CreateNatGateway":
-       if handle_nat_tagging(rec):
+   if event_name == "CreateXxx":
+       if handle_xxx_tagging(rec):
            tagged += 1
        continue
    ```
 
-3. **Implement Tagging Logic**:
+3. **Implement Tagging Logic** (in `services/xxx.py`):
    ```python
-   def handle_nat_tagging(rec: Dict[str, Any]) -> bool:
-       # Extract NAT ID, region, build QCS
+   def handle_xxx_tagging(rec: Dict[str, Any]) -> bool:
+       # Extract resource ID, region, build QCS
        # Call tag_resource_qcs() with appropriate tags
        pass
    ```
