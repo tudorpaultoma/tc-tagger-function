@@ -20,6 +20,7 @@ tc-tagger-function/
 │   ├── eni.py               # ENI tagging (CreateNetworkInterface)
 │   ├── havip.py             # HAVIP tagging (CreateHaVip)
 │   ├── nat.py               # NAT Gateway tagging (CreateNatGateway, CreatePrivateNatGateway)
+│   ├── ccn.py               # CCN tagging (CreateCcn)
 │   ├── snapshot.py          # CBS Snapshot tagging (CreateSnapshot)
 │   ├── tke.py               # TKE cluster tagging (CreateCluster)
 │   └── autoscaling.py       # Auto Scaling tagging (CreateAutoScalingGroup, CreateLaunchConfiguration)
@@ -46,6 +47,7 @@ tc-tagger-function/
 | `services/eni.py` | ENI tag builder, ENI info queries via VPC API, ENI tagging handler |
 | `services/havip.py` | HAVIP tag builder, HAVIP info queries via VPC API, HAVIP tagging handler |
 | `services/nat.py` | NAT Gateway tag builder, public NAT info queries (DescribeNatGateways), private NAT info queries (DescribePrivateNatGateways), NAT tagging handler |
+| `services/ccn.py` | CCN tag builder, CCN info queries (DescribeCcns), CCN tagging handler |
 | `services/snapshot.py` | Snapshot tag builder, snapshot info queries via CBS API, snapshot tagging handler |
 | `services/tke.py` | TKE cluster tag builder, cluster info queries via TKE API, TKE tagging handler |
 | `services/autoscaling.py` | AS tag builders (scaling group + launch config), AS info queries, ASG/LC tagging handlers |
@@ -92,6 +94,7 @@ Initially attempted to use a single CloudAudit track with:
 │  │              │  │              │  │              │  │ TransformAddr│  │              │  │        ││
 │  │              │  │              │  │              │  │ CreateNatGw  │  │              │  │        ││
 │  │              │  │              │  │              │  │ CreatePrvNat │  │              │  │        ││
+│  │              │  │              │  │              │  │ CreateCcn    │  │              │  │        ││
 │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └───┬────┘│
 │         │                 │                 │                 │                 │               │      │
 └─────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼───────────────┼──────┘
@@ -117,6 +120,7 @@ Initially attempted to use a single CloudAudit track with:
               │    ├── services/eni.py           │
               │    ├── services/havip.py         │
               │    ├── services/nat.py           │
+              │    ├── services/ccn.py           │
               │    ├── services/snapshot.py      │
               │    ├── services/tke.py           │
               │    └── services/autoscaling.py   │
@@ -158,12 +162,12 @@ Initially attempted to use a single CloudAudit track with:
 }
 ```
 
-#### Track 4: VPC Resources (EIP, ENI, HAVIP, NAT Gateway, Private NAT Gateway)
+#### Track 4: VPC Resources (EIP, ENI, HAVIP, NAT Gateway, Private NAT Gateway, CCN)
 ```json
 {
   "Name": "tagger-vpc-track",
   "ResourceType": "vpc",
-  "EventNames": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress", "CreateNatGateway", "CreatePrivateNatGateway"],
+  "EventNames": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress", "CreateNatGateway", "CreatePrivateNatGateway", "CreateCcn"],
   "ActionType": "Write",
   "Storage": { "StorageType": "cos", "StorageName": "tommywork", "StorageRegion": "eu-frankfurt", "StoragePrefix": "cloudaudit" }
 }
@@ -197,6 +201,7 @@ Initially attempted to use a single CloudAudit track with:
 > - HAVIP: `qcs::vpc:...:havip/{id}` (VPC namespace)
 > - NAT Gateway: `qcs::vpc:...:nat/{id}` (VPC namespace)
 > - Private NAT Gateway: `qcs::vpc:...:intranat/{id}` (VPC namespace)
+> - CCN: `qcs::vpc:...:ccn/{id}` (VPC namespace)
 >
 > CBS Snapshots use `ResourceType: "cbs"` in CloudAudit (captured by wildcard track) but `qcs::cvm:...:snapshot/{id}` in Tag API.
 >
@@ -228,7 +233,7 @@ Initially attempted to use a single CloudAudit track with:
 
 ## Event Flow
 
-1. **Resource Creation**: User creates CVM/CLB/CBS/EIP/ENI/HAVIP/NAT/PrivateNAT/Snapshot/TKE/ASG/LC in any region
+1. **Resource Creation**: User creates CVM/CLB/CBS/EIP/ENI/HAVIP/NAT/PrivateNAT/CCN/Snapshot/TKE/ASG/LC in any region
 2. **CloudAudit Capture**: Appropriate track captures the event
 3. **COS Delivery**: Event delivered to shared COS bucket (2-6 min delay)
 4. **SCF Trigger**: COS ObjectCreated event triggers function
@@ -340,6 +345,6 @@ High-cost resources to prioritize:
 
 ---
 
-**Last Updated**: 2026-03-21  
-**Architecture Version**: 3.1.0  
-**Status**: Production (CVM/CDH/CLB/CBS/EIP/ENI/HAVIP/NAT/PrivateNAT/Snapshot/TKE/AS fully operational)
+**Last Updated**: 2026-03-22  
+**Architecture Version**: 3.2.0  
+**Status**: Production (CVM/CDH/CLB/CBS/EIP/ENI/HAVIP/NAT/PrivateNAT/CCN/Snapshot/TKE/AS fully operational)

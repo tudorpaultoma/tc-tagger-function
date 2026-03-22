@@ -19,6 +19,7 @@
         "cvm:DescribeAddresses",
         "vpc:DescribeNatGateways",
         "vpc:DescribePrivateNatGateways",
+        "vpc:DescribeCcns",
         "vpc:DescribeNetworkInterfaces",
         "vpc:DescribeHaVips",
         "clb:DescribeLoadBalancers",

@@ -55,6 +55,14 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
   - Public: `qcs::vpc:{region}:uin/{uin}:nat/{nat_id}`
   - Private: `qcs::vpc:{region}:uin/{uin}:intranat/{intranat_id}`
 
+### 🔗 **CCN (Cloud Connect Network)** ✅
+- **CCN Instances** - `CreateCcn` events (ID prefix: `ccn-`)
+- **Full-Mesh Networking**: CCN provides interconnection between VPCs across regions and with on-premises data centers
+- **CCN Details**: Queries `DescribeCcns` for name, state, QoS level, bandwidth limit type
+- **CCN-Specific Tags**: Includes `TaggerCcnName` tag with the CCN instance name
+- **Shared VPC Track**: CCN events use `ResourceType="vpc"` in CloudAudit (same track as EIP/ENI/HAVIP/NAT)
+- **QCS format**: `qcs::vpc:{region}:uin/{uin}:ccn/{ccn_id}` (VPC service namespace)
+
 ### 📸 **CBS Snapshot** ✅
 - **Snapshots** - `CreateSnapshot` events
 - **Source Disk Info**: Queries `DescribeSnapshots` for source disk ID and usage type
@@ -80,7 +88,7 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 ## Features
 
 - **Global Multi-Region Support**: Automatically monitors and tags resources across ALL Tencent Cloud regions
-- **Multi-Resource Support**: Tags CVM instances, CDH hosts, CLB load balancers, CBS disks, CBS snapshots, EIPs, ENIs, HAVIPs, NAT Gateways (public + private), TKE clusters, and Auto Scaling groups/launch configs automatically
+- **Multi-Resource Support**: Tags CVM instances, CDH hosts, CLB load balancers, CBS disks, CBS snapshots, EIPs, ENIs, HAVIPs, NAT Gateways (public + private), CCN instances, TKE clusters, and Auto Scaling groups/launch configs automatically
 - **Automatic Tagging**: Tags resources immediately after creation
 - **CloudAudit Integration**: Separate CloudAudit tracks per service type for reliable event delivery
 - **Flexible Owner Detection**: Prioritizes email, username, account ID, or UIN for owner identification
@@ -187,6 +195,19 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 **Note**: Public NAT uses `qcs::vpc:region:uin/xxx:nat/nat-id`, private NAT uses `qcs::vpc:region:uin/xxx:intranat/intranat-id`. EIPs auto-allocated by public NAT are also tagged by the NAT handler.
 
+### CCN Tags (Cloud Connect Network)
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCcnName` | CCN instance name | `production-ccn` |
+| `TaggerCreated` | Creation date | `2026-03-22` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
+
+**Note**: CCN uses `qcs::vpc:region:uin/xxx:ccn/ccn-id` format for Tag API (VPC service namespace). CCN is a global resource but requires a region for the Tag API call.
+
 ### CBS Snapshot Tags
 
 | Tag Key | Description | Example Value |
@@ -237,7 +258,7 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 3. **SCF** processes new log files via COS triggers
 4. **Tag API** applies standardized tags to resources
 5. **CBS API** queries disks attached to CVM instances for automatic disk tagging, and snapshot source disk info
-6. **VPC API** queries ENI attachment info, HAVIP subnet/VPC details, EIP status, and NAT Gateway details
+6. **VPC API** queries ENI attachment info, HAVIP subnet/VPC details, EIP status, NAT Gateway details, and CCN instance info
 7. **TKE API** queries cluster details (name, type, status, node count, K8s version)
 8. **AS API** queries scaling group capacity settings and launch configuration details
 
@@ -257,6 +278,7 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 - `CreateHaVip` - HAVIP high availability virtual IP creation ✅
 - `CreateNatGateway` - Public NAT Gateway creation (+ auto-tag associated EIPs) ✅
 - `CreatePrivateNatGateway` - Private NAT Gateway creation ✅
+- `CreateCcn` - CCN Cloud Connect Network creation ✅
 - `CreateCluster` - TKE Kubernetes cluster creation ✅
 - `CreateAutoScalingGroup` - Auto Scaling group creation ✅
 - `CreateLaunchConfiguration` - Auto Scaling launch configuration creation ✅
@@ -391,9 +413,9 @@ Attach the following policies to your SCF execution role:
 }
 ```
 
-#### VPC Resource Policy (Required for ENI, HAVIP, and NAT Gateway info)
+#### VPC Resource Policy (Required for ENI, HAVIP, NAT Gateway, and CCN info)
 
-> **Note**: ENI, HAVIP, and NAT Gateway queries use the `vpc` service namespace.
+> **Note**: ENI, HAVIP, NAT Gateway, and CCN queries use the `vpc` service namespace.
 
 ```json
 {
@@ -401,7 +423,7 @@ Attach the following policies to your SCF execution role:
   "statement": [
     {
       "effect": "allow",
-      "action": ["vpc:DescribeNetworkInterfaces", "vpc:DescribeHaVips", "vpc:DescribeNatGateways", "vpc:DescribePrivateNatGateways"],
+      "action": ["vpc:DescribeNetworkInterfaces", "vpc:DescribeHaVips", "vpc:DescribeNatGateways", "vpc:DescribePrivateNatGateways", "vpc:DescribeCcns"],
       "resource": ["*"]
     }
   ]
@@ -484,9 +506,9 @@ The function automatically configures CloudAudit tracks per service type:
 - **Monitors**: CBS disk creation and attachment
 
 #### Track 4: VPC Track (`tagger-vpc-track`)
-- **Events**: `AllocateAddresses`, `CreateNetworkInterface`, `CreateHaVip`, `TransformAddress`, `CreateNatGateway`, `CreatePrivateNatGateway`
+- **Events**: `AllocateAddresses`, `CreateNetworkInterface`, `CreateHaVip`, `TransformAddress`, `CreateNatGateway`, `CreatePrivateNatGateway`, `CreateCcn`
 - **ResourceType**: `vpc`
-- **Monitors**: EIP allocation, EIP conversion, ENI creation, HAVIP creation, NAT Gateway creation (public + private)
+- **Monitors**: EIP allocation, EIP conversion, ENI creation, HAVIP creation, NAT Gateway creation (public + private), CCN creation
 
 #### Track 5: TKE Track (`tagger-tke-track`)
 - **Events**: `CreateCluster`
@@ -533,7 +555,7 @@ CBS disks are tagged using two strategies:
 
 Once deployed and configured, the function operates automatically:
 
-1. Create a new CVM instance, CDH host, CLB load balancer, CBS disk, CBS snapshot, EIP, ENI, HAVIP, NAT Gateway, TKE cluster, or Auto Scaling group in any region
+1. Create a new CVM instance, CDH host, CLB load balancer, CBS disk, CBS snapshot, EIP, ENI, HAVIP, NAT Gateway, CCN instance, TKE cluster, or Auto Scaling group in any region
 2. CloudAudit captures the creation event
 3. Event is stored in COS bucket
 4. SCF function is triggered by new COS object
@@ -608,6 +630,7 @@ scf-tagger/
 │   ├── eni.py                  # ENI tagging with region discovery
 │   ├── havip.py                # HAVIP tagging with VPC/subnet info
 │   ├── nat.py                  # NAT Gateway tagging (public + private) + EIP auto-tag
+│   ├── ccn.py                  # CCN Cloud Connect Network tagging
 │   ├── snapshot.py             # CBS snapshot tagging with source disk info
 │   ├── tke.py                  # TKE cluster tagging
 │   └── autoscaling.py          # Auto Scaling group + launch config tagging

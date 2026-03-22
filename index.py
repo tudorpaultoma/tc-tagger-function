@@ -15,6 +15,7 @@ Supported services:
 - ENI elastic network interfaces (CreateNetworkInterface)
 - HAVIP high availability virtual IPs (CreateHaVip)
 - NAT Gateway — public (CreateNatGateway) and private (CreatePrivateNatGateway)
+- CCN Cloud Connect Network (CreateCcn)
 - TKE clusters (CreateCluster)
 - Auto Scaling groups (CreateAutoScalingGroup)
 - Auto Scaling launch configurations (CreateLaunchConfiguration)
@@ -22,7 +23,7 @@ Supported services:
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 3.0.0
+Version: 3.2.0
 License: Apache 2.0
 """
 
@@ -64,6 +65,7 @@ from services.nat import handle_nat_tagging
 from services.snapshot import handle_snapshot_tagging
 from services.tke import handle_tke_tagging
 from services.autoscaling import handle_asg_tagging, handle_lc_tagging
+from services.ccn import handle_ccn_tagging
 
 # Configuration from environment variables
 COS_BUCKET       = os.getenv("COS_BUCKET")
@@ -329,7 +331,7 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         - Track 1 (tagger-cvm-track): ResourceType="cvm" → RunInstances, AllocateHosts
         - Track 2 (tagger-clb-track): ResourceType="clb" → CreateLoadBalancer
         - Track 3 (tagger-cbs-track): ResourceType="cbs" → ["*"] (all CBS write events incl. CreateSnapshot)
-        - Track 4 (tagger-vpc-track): ResourceType="vpc" → AllocateAddresses, CreateNetworkInterface, CreateHaVip, TransformAddress, CreateNatGateway, CreatePrivateNatGateway
+        - Track 4 (tagger-vpc-track): ResourceType="vpc" → AllocateAddresses, CreateNetworkInterface, CreateHaVip, TransformAddress, CreateNatGateway, CreatePrivateNatGateway, CreateCcn
         - Track 5 (tagger-tke-track): ResourceType="tke" → CreateCluster
         - Track 6 (tagger-as-track):  ResourceType="as"  → CreateAutoScalingGroup, CreateLaunchConfiguration
         - All tracks deliver to same COS bucket → single SCF function processes all events
@@ -353,7 +355,7 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         {"name": "tagger-cvm-track", "resource_type": "cvm", "event_names": ["RunInstances", "AllocateHosts"]},
         {"name": "tagger-clb-track", "resource_type": "clb", "event_names": ["CreateLoadBalancer"]},
         {"name": "tagger-cbs-track", "resource_type": "cbs", "event_names": ["*"]},
-        {"name": "tagger-vpc-track", "resource_type": "vpc", "event_names": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress", "CreateNatGateway", "CreatePrivateNatGateway"]},
+        {"name": "tagger-vpc-track", "resource_type": "vpc", "event_names": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress", "CreateNatGateway", "CreatePrivateNatGateway", "CreateCcn"]},
         {"name": "tagger-tke-track", "resource_type": "tke", "event_names": ["CreateCluster"]},
         {"name": "tagger-as-track",  "resource_type": "as",  "event_names": ["CreateAutoScalingGroup", "CreateLaunchConfiguration"]},
     ]
@@ -555,6 +557,12 @@ def main_handler(event, context):
                 # --- NAT Gateway events (public + private) ---
                 if event_name in ("CreateNatGateway", "CreatePrivateNatGateway"):
                     if handle_nat_tagging(rec):
+                        tagged += 1
+                    continue
+
+                # --- CCN events ---
+                if event_name == "CreateCcn":
+                    if handle_ccn_tagging(rec):
                         tagged += 1
                     continue
 

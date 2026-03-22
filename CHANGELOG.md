@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-03-22
+
+### Added
+- **CCN (Cloud Connect Network) Support**: Automatic tagging for CCN instances (`CreateCcn`)
+  - New service module: `services/ccn.py`
+  - Queries `DescribeCcns` for name, state, QoS level, bandwidth limit type
+  - CCN-specific tags: `TaggerCcnName` (plus standard 5)
+  - QCS format: `qcs::vpc:{region}:uin/{uin}:ccn/{ccn_id}` (VPC namespace)
+  - CCN is a global resource but requires a region for Tag API calls
+  - Shared VPC track — `CreateCcn` added to `tagger-vpc-track` event list
+
+### Changed
+- **VPC Track Updated**: Added `CreateCcn` to `tagger-vpc-track` event names (now 7 events total)
+- **Version bump**: 3.1.0 → 3.2.0
+
+### IAM Requirements
+- New permission needed:
+  - `vpc:DescribeCcns` (CCN instance info)
+
 ## [3.1.0] - 2026-03-21
 
 ### Added
