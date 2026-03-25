@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-03-25
+
+### Added
+- **Lighthouse Support**: Automatic tagging for Lighthouse instances (`CreateInstances`)
+  - New service module: `services/lighthouse.py`
+  - Queries `DescribeInstances` for instance name, state, zone, bundle, blueprint
+  - CVM-similar tags: `TaggerAutoOff`, `TaggerAutoStart` (plus standard 5)
+  - Optional `TaggerInstanceName` tag when instance name is available
+  - New CloudAudit track: `tagger-lighthouse-track` (`ResourceType="lighthouse"`)
+  - QCS format: `qcs::lighthouse:{region}:uin/{uin}:instance/{lhins_id}`
+  - Instance IDs use `lhins-` prefix
+
+### Changed
+- **CloudAudit Tracks**: Now 7 tracks total (CVM, CLB, CBS, VPC, TKE, AS, Lighthouse)
+- **Version bump**: 3.2.0 → 3.3.0
+
+### IAM Requirements
+- New permission needed:
+  - `lighthouse:DescribeInstances` (Lighthouse instance info)
+
 ## [3.2.0] - 2026-03-22
 
 ### Added

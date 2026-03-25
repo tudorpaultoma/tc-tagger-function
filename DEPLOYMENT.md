@@ -1,10 +1,10 @@
 # SCF Resource Tagger - Deployment Guide
 
-## ✅ Status: **PRODUCTION (v3.2.0)**
+## ✅ Status: **PRODUCTION (v3.3.0)**
 
-The function supports CVM, CDH, CLB, CBS, CBS Snapshots, EIP (including TransformAddress), ENI, HAVIP, NAT Gateway (public + private), CCN, TKE, and Auto Scaling auto-tagging across all regions.
+The function supports CVM, CDH, CLB, CBS, CBS Snapshots, EIP (including TransformAddress), ENI, HAVIP, NAT Gateway (public + private), CCN, Lighthouse, TKE, and Auto Scaling auto-tagging across all regions.
 
-## Current Version: v3.2.0
+## Current Version: v3.3.0
 
 ### What's Working
 - ✅ **CVM instances** - Auto-tagged via `RunInstances` events
@@ -18,6 +18,7 @@ The function supports CVM, CDH, CLB, CBS, CBS Snapshots, EIP (including Transfor
 - ✅ **NAT Gateways (public)** - Auto-tagged via `CreateNatGateway` events (+ auto-tag associated EIPs)
 - ✅ **NAT Gateways (private)** - Auto-tagged via `CreatePrivateNatGateway` events
 - ✅ **CCN instances** - Auto-tagged via `CreateCcn` events (with CCN name tag)
+- ✅ **Lighthouse instances** - Auto-tagged via `CreateInstances` events (with instance name tag)
 - ✅ **TKE clusters** - Auto-tagged via `CreateCluster` events
 - ✅ **Auto Scaling groups** - Auto-tagged via `CreateAutoScalingGroup` events
 - ✅ **Auto Scaling launch configs** - Auto-tagged via `CreateLaunchConfiguration` events
@@ -287,7 +288,7 @@ Upload the new deployment package:
 
 ## Files
 
-- `index.py` - Main handler + shared utilities + event routing (v3.2.0)
+- `index.py` - Main handler + shared utilities + event routing (v3.3.0)
 - `services/cvm.py` - CVM/CDH tagging + attached disk tagging
 - `services/clb.py` - CLB tagging
 - `services/cbs.py` - CBS disk tagging
@@ -297,6 +298,7 @@ Upload the new deployment package:
 - `services/nat.py` - NAT Gateway tagging (public + private) + EIP auto-tag
 - `services/ccn.py` - CCN Cloud Connect Network tagging
 - `services/snapshot.py` - CBS snapshot tagging with source disk info
+- `services/lighthouse.py` - Lighthouse instance tagging
 - `services/tke.py` - TKE cluster tagging
 - `services/autoscaling.py` - Auto Scaling group + launch config tagging
 - `deploy.sh` - Deployment package builder
