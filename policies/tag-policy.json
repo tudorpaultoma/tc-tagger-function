@@ -27,7 +27,8 @@
         "cbs:DescribeDisks",
         "tke:DescribeClusters",
         "as:DescribeAutoScalingGroups",
-        "as:DescribeLaunchConfigurations"
+        "as:DescribeLaunchConfigurations",
+        "lighthouse:DescribeInstances"
       ],
       "resource": [
         "*"
