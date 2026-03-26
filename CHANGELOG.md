@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] - 2026-03-26
+
+### Changed
+- **Lighthouse Snapshot Tags**: Removed `TaggerSourceDisk` and `TaggerDiskUsage` tags from Lighthouse snapshots
+  - Snapshot tags now: `TaggerOwner`, `TaggerCreated`, `TaggerSourceInstance`, `TaggerCanDelete`, `TaggerTTL`, `TaggerProject` (6 tags)
+
+## [3.4.0] - 2026-03-26
+
+### Added
+- **Lighthouse Snapshot Support**: Automatic tagging for Lighthouse snapshots (`CreateInstanceSnapshot`)
+  - New handler: `handle_lighthouse_snapshot_tagging` in `services/lighthouse.py`
+  - New tag builder: `build_lighthouse_snapshot_tags` with source instance metadata
+  - Queries `DescribeSnapshots` for snapshot details (state, disk size)
+  - QCS format: `qcs::lighthouse:{region}:uin/{uin}:snapshot/{lhsnap_id}`
+  - Snapshot IDs use `lhsnap-` prefix
+  - Tags: `TaggerOwner`, `TaggerCreated`, `TaggerSourceInstance`, `TaggerCanDelete`, `TaggerTTL`, `TaggerProject`
+
+### Changed
+- **Lighthouse CloudAudit Track**: Set to wildcard `["*"]` to discover actual CA event names for snapshots
+  - CloudAudit may not deliver `CreateInstanceSnapshot` under expected event name
+  - Will be locked down once actual event name is confirmed
+- **Version bump**: 3.3.0 → 3.4.0
+
+### IAM Requirements
+- New permission needed:
+  - `lighthouse:DescribeSnapshots` (Lighthouse snapshot info)
+
 ## [3.3.0] - 2026-03-25
 
 ### Added

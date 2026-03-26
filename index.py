@@ -25,7 +25,7 @@ Supported services:
 CloudAudit tracks are global and automatically monitor all regions.
 
 Author: Tudor Toma
-Version: 3.3.0
+Version: 3.4.1
 License: Apache 2.0
 """
 

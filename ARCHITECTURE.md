@@ -50,7 +50,7 @@ tc-tagger-function/
 | `services/nat.py` | NAT Gateway tag builder, public NAT info queries (DescribeNatGateways), private NAT info queries (DescribePrivateNatGateways), NAT tagging handler |
 | `services/ccn.py` | CCN tag builder, CCN info queries (DescribeCcns), CCN tagging handler |
 | `services/snapshot.py` | Snapshot tag builder, snapshot info queries via CBS API, snapshot tagging handler |
-| `services/lighthouse.py` | Lighthouse tag builder, instance info queries (DescribeInstances), Lighthouse tagging handler |
+| `services/lighthouse.py` | Lighthouse tag builders (instance + snapshot), instance info queries (DescribeInstances), snapshot info queries (DescribeSnapshots), Lighthouse instance and snapshot tagging handlers |
 | `services/tke.py` | TKE cluster tag builder, cluster info queries via TKE API, TKE tagging handler |
 | `services/autoscaling.py` | AS tag builders (scaling group + launch config), AS info queries, ASG/LC tagging handlers |
 
@@ -203,7 +203,7 @@ Initially attempted to use a single CloudAudit track with:
 {
   "Name": "tagger-lighthouse-track",
   "ResourceType": "lighthouse",
-  "EventNames": ["CreateInstances"],
+  "EventNames": ["*"],
   "ActionType": "Write",
   "Storage": { "StorageType": "cos", "StorageName": "tommywork", "StorageRegion": "eu-frankfurt", "StoragePrefix": "cloudaudit" }
 }
@@ -219,6 +219,7 @@ Initially attempted to use a single CloudAudit track with:
 >
 > Lighthouse uses `ResourceType: "lighthouse"` in CloudAudit:
 > - Instance: `qcs::lighthouse:...:instance/{id}`
+> - Snapshot: `qcs::lighthouse:...:snapshot/{id}`
 >
 > CBS Snapshots use `ResourceType: "cbs"` in CloudAudit (captured by wildcard track) but `qcs::cvm:...:snapshot/{id}` in Tag API.
 >
@@ -250,7 +251,7 @@ Initially attempted to use a single CloudAudit track with:
 
 ## Event Flow
 
-1. **Resource Creation**: User creates CVM/CLB/CBS/EIP/ENI/HAVIP/NAT/PrivateNAT/CCN/Lighthouse/Snapshot/TKE/ASG/LC in any region
+1. **Resource Creation**: User creates CVM/CLB/CBS/EIP/ENI/HAVIP/NAT/PrivateNAT/CCN/Lighthouse instance/Lighthouse snapshot/Snapshot/TKE/ASG/LC in any region
 2. **CloudAudit Capture**: Appropriate track captures the event
 3. **COS Delivery**: Event delivered to shared COS bucket (2-6 min delay)
 4. **SCF Trigger**: COS ObjectCreated event triggers function
@@ -362,6 +363,6 @@ High-cost resources to prioritize:
 
 ---
 
-**Last Updated**: 2026-03-25  
-**Architecture Version**: 3.3.0  
-**Status**: Production (CVM/CDH/CLB/CBS/EIP/ENI/HAVIP/NAT/PrivateNAT/CCN/Lighthouse/Snapshot/TKE/AS fully operational)
+**Last Updated**: 2026-03-26  
+**Architecture Version**: 3.4.1  
+**Status**: Production (CVM/CDH/CLB/CBS/EIP/ENI/HAVIP/NAT/PrivateNAT/CCN/Lighthouse instances+snapshots/CBS Snapshot/TKE/AS fully operational)

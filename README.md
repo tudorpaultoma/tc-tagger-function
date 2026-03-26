@@ -71,12 +71,16 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 
 ### 🏠 **Lighthouse (Tencent Cloud Lighthouse)** ✅
 - **Instances** - `CreateInstances` events (ID prefix: `lhins-`)
+- **Snapshots** - `CreateInstanceSnapshot` events (ID prefix: `lhsnap-`)
 - **Lightweight Compute**: Simplified compute service for small workloads, websites, dev environments
 - **Instance Details**: Queries `DescribeInstances` for name, state, zone, bundle, blueprint
+- **Snapshot Details**: Queries `DescribeSnapshots` for state, disk size
 - **CVM-Similar Tags**: Includes `TaggerAutoOff`, `TaggerAutoStart` (supports start/stop)
 - **Instance Name Tag**: Optional `TaggerInstanceName` when instance name is available
 - **Dedicated Track**: `tagger-lighthouse-track` with `ResourceType="lighthouse"`
-- **QCS format**: `qcs::lighthouse:{region}:uin/{uin}:instance/{lhins_id}`
+- **QCS formats**:
+  - Instance: `qcs::lighthouse:{region}:uin/{uin}:instance/{lhins_id}`
+  - Snapshot: `qcs::lighthouse:{region}:uin/{uin}:snapshot/{lhsnap_id}`
 
 ### ☸️ **TKE (Tencent Kubernetes Engine)** ✅
 - **Clusters** - `CreateCluster` events
@@ -97,7 +101,7 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 ## Features
 
 - **Global Multi-Region Support**: Automatically monitors and tags resources across ALL Tencent Cloud regions
-- **Multi-Resource Support**: Tags CVM instances, CDH hosts, CLB load balancers, CBS disks, CBS snapshots, EIPs, ENIs, HAVIPs, NAT Gateways (public + private), CCN instances, Lighthouse instances, TKE clusters, and Auto Scaling groups/launch configs automatically
+- **Multi-Resource Support**: Tags CVM instances, CDH hosts, CLB load balancers, CBS disks, CBS snapshots, EIPs, ENIs, HAVIPs, NAT Gateways (public + private), CCN instances, Lighthouse instances, Lighthouse snapshots, TKE clusters, and Auto Scaling groups/launch configs automatically
 - **Automatic Tagging**: Tags resources immediately after creation
 - **CloudAudit Integration**: Separate CloudAudit tracks per service type for reliable event delivery
 - **Flexible Owner Detection**: Prioritizes email, username, account ID, or UIN for owner identification
@@ -238,13 +242,26 @@ This SCF function monitors CloudAudit logs stored in COS and automatically appli
 |---------|-------------|---------------|
 | `TaggerCanDelete` | Auto-deletion flag | `YES` |
 | `TaggerCreated` | Creation date | `2026-03-21` |
-| `TaggerDiskUsage` | Source disk type | `SYSTEM_DISK` or `DATA_DISK` |
 | `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
 | `TaggerProject` | Project designation | `n/a` |
 | `TaggerSourceDisk` | Source disk ID the snapshot was created from | `disk-abc123` |
+| `TaggerDiskUsage` | Source disk type | `SYSTEM_DISK` or `DATA_DISK` |
 | `TaggerTTL` | Time-to-live in days before deletion | `3` |
 
 **Note**: Snapshot uses `qcs::cvm:region:uin/xxx:snapshot/snap-id` format for Tag API (CVM service namespace).
+
+### Lighthouse Snapshot Tags
+
+| Tag Key | Description | Example Value |
+|---------|-------------|---------------|
+| `TaggerCanDelete` | Auto-deletion flag | `YES` |
+| `TaggerCreated` | Creation date | `2026-03-26` |
+| `TaggerOwner` | Resource owner (email, username, or account ID) | `tudortoma` |
+| `TaggerProject` | Project designation | `n/a` |
+| `TaggerSourceInstance` | Source Lighthouse instance ID | `lhins-k70j6jhj` |
+| `TaggerTTL` | Time-to-live in days before deletion | `3` |
+
+**Note**: Lighthouse snapshot uses `qcs::lighthouse:region:uin/xxx:snapshot/lhsnap-id` format for Tag API.
 
 ### TKE Cluster Tags
 
@@ -284,7 +301,7 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 5. **CBS API** queries disks attached to CVM instances for automatic disk tagging, and snapshot source disk info
 6. **VPC API** queries ENI attachment info, HAVIP subnet/VPC details, EIP status, NAT Gateway details, and CCN instance info
 7. **TKE API** queries cluster details (name, type, status, node count, K8s version)
-8. **Lighthouse API** queries instance details (name, state, zone, bundle, blueprint)
+8. **Lighthouse API** queries instance details (name, state, zone, bundle, blueprint) and snapshot details (state, disk size)
 9. **AS API** queries scaling group capacity settings and launch configuration details
 
 **Note**: CloudAudit tracks are global by default - a single track monitors all regions automatically.
@@ -305,6 +322,7 @@ CloudAudit (Global) → COS Bucket → SCF Trigger → Tag Resources
 - `CreatePrivateNatGateway` - Private NAT Gateway creation ✅
 - `CreateCcn` - CCN Cloud Connect Network creation ✅
 - `CreateInstances` - Lighthouse instance creation ✅
+- `CreateInstanceSnapshot` - Lighthouse snapshot creation ✅
 - `CreateCluster` - TKE Kubernetes cluster creation ✅
 - `CreateAutoScalingGroup` - Auto Scaling group creation ✅
 - `CreateLaunchConfiguration` - Auto Scaling launch configuration creation ✅
@@ -501,7 +519,7 @@ Attach the following policies to your SCF execution role:
 }
 ```
 
-#### Lighthouse Resource Policy (Required for instance info)
+#### Lighthouse Resource Policy (Required for instance and snapshot info)
 
 ```json
 {
@@ -509,7 +527,7 @@ Attach the following policies to your SCF execution role:
   "statement": [
     {
       "effect": "allow",
-      "action": ["lighthouse:DescribeInstances"],
+      "action": ["lighthouse:DescribeInstances", "lighthouse:DescribeSnapshots"],
       "resource": ["*"]
     }
   ]
@@ -562,9 +580,9 @@ The function automatically configures CloudAudit tracks per service type:
 - **Monitors**: Auto Scaling group and launch configuration creation
 
 #### Track 7: Lighthouse Track (`tagger-lighthouse-track`)
-- **Events**: `CreateInstances`
+- **Events**: `*` (all Lighthouse write events — instances + snapshots)
 - **ResourceType**: `lighthouse`
-- **Monitors**: Lighthouse instance creation
+- **Monitors**: Lighthouse instance creation and snapshot creation
 
 **Storage**: All tracks deliver logs to the COS bucket specified in `COS_BUCKET`/`COS_REGION`
 
@@ -601,7 +619,7 @@ CBS disks are tagged using two strategies:
 
 Once deployed and configured, the function operates automatically:
 
-1. Create a new CVM instance, CDH host, CLB load balancer, CBS disk, CBS snapshot, EIP, ENI, HAVIP, NAT Gateway, CCN instance, Lighthouse instance, TKE cluster, or Auto Scaling group in any region
+1. Create a new CVM instance, CDH host, CLB load balancer, CBS disk, CBS snapshot, EIP, ENI, HAVIP, NAT Gateway, CCN instance, Lighthouse instance, Lighthouse snapshot, TKE cluster, or Auto Scaling group in any region
 2. CloudAudit captures the creation event
 3. Event is stored in COS bucket
 4. SCF function is triggered by new COS object

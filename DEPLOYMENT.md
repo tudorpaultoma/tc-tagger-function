@@ -1,10 +1,10 @@
 # SCF Resource Tagger - Deployment Guide
 
-## ✅ Status: **PRODUCTION (v3.3.0)**
+## ✅ Status: **PRODUCTION (v3.4.1)**
 
-The function supports CVM, CDH, CLB, CBS, CBS Snapshots, EIP (including TransformAddress), ENI, HAVIP, NAT Gateway (public + private), CCN, Lighthouse, TKE, and Auto Scaling auto-tagging across all regions.
+The function supports CVM, CDH, CLB, CBS, CBS Snapshots, EIP (including TransformAddress), ENI, HAVIP, NAT Gateway (public + private), CCN, Lighthouse instances, Lighthouse snapshots, TKE, and Auto Scaling auto-tagging across all regions.
 
-## Current Version: v3.3.0
+## Current Version: v3.4.1
 
 ### What's Working
 - ✅ **CVM instances** - Auto-tagged via `RunInstances` events
@@ -19,6 +19,7 @@ The function supports CVM, CDH, CLB, CBS, CBS Snapshots, EIP (including Transfor
 - ✅ **NAT Gateways (private)** - Auto-tagged via `CreatePrivateNatGateway` events
 - ✅ **CCN instances** - Auto-tagged via `CreateCcn` events (with CCN name tag)
 - ✅ **Lighthouse instances** - Auto-tagged via `CreateInstances` events (with instance name tag)
+- ✅ **Lighthouse snapshots** - Auto-tagged via `CreateInstanceSnapshot` events (with source instance tag)
 - ✅ **TKE clusters** - Auto-tagged via `CreateCluster` events
 - ✅ **Auto Scaling groups** - Auto-tagged via `CreateAutoScalingGroup` events
 - ✅ **Auto Scaling launch configs** - Auto-tagged via `CreateLaunchConfiguration` events
@@ -102,6 +103,14 @@ The function supports CVM, CDH, CLB, CBS, CBS Snapshots, EIP (including Transfor
 - `TaggerTTL`: Default "3" (days before auto-deletion)
 - `TaggerProject`: Default "n/a"
 
+#### Lighthouse Snapshot Tags
+- `TaggerOwner`: Snapshot creator (email or username)
+- `TaggerCreated`: Creation date (ISO format)
+- `TaggerSourceInstance`: Source Lighthouse instance ID (lhins-xxx)
+- `TaggerCanDelete`: Default "YES" (for auto-deletion)
+- `TaggerTTL`: Default "3" (days before auto-deletion)
+- `TaggerProject`: Default "n/a"
+
 #### TKE Cluster Tags
 - `TaggerOwner`: Cluster creator (email or username)
 - `TaggerCreated`: Creation date (ISO format)
@@ -175,6 +184,12 @@ The function automatically creates/updates separate CloudAudit tracks per servic
 - **Name**: `tagger-as-track`
 - **ResourceType**: `as`
 - **Events**: `CreateAutoScalingGroup`, `CreateLaunchConfiguration`
+- **Coverage**: All Tencent Cloud regions automatically
+
+### Track 7: Lighthouse Resources
+- **Name**: `tagger-lighthouse-track`
+- **ResourceType**: `lighthouse`
+- **Events**: `*` (all Lighthouse write events — instances + snapshots)
 - **Coverage**: All Tencent Cloud regions automatically
 
 ### Common Settings
@@ -288,7 +303,7 @@ Upload the new deployment package:
 
 ## Files
 
-- `index.py` - Main handler + shared utilities + event routing (v3.3.0)
+- `index.py` - Main handler + shared utilities + event routing (v3.4.1)
 - `services/cvm.py` - CVM/CDH tagging + attached disk tagging
 - `services/clb.py` - CLB tagging
 - `services/cbs.py` - CBS disk tagging
@@ -298,7 +313,7 @@ Upload the new deployment package:
 - `services/nat.py` - NAT Gateway tagging (public + private) + EIP auto-tag
 - `services/ccn.py` - CCN Cloud Connect Network tagging
 - `services/snapshot.py` - CBS snapshot tagging with source disk info
-- `services/lighthouse.py` - Lighthouse instance tagging
+- `services/lighthouse.py` - Lighthouse instance + snapshot tagging
 - `services/tke.py` - TKE cluster tagging
 - `services/autoscaling.py` - Auto Scaling group + launch config tagging
 - `deploy.sh` - Deployment package builder
