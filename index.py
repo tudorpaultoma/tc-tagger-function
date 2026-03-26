@@ -17,6 +17,7 @@ Supported services:
 - NAT Gateway — public (CreateNatGateway) and private (CreatePrivateNatGateway)
 - CCN Cloud Connect Network (CreateCcn)
 - Lighthouse instances (CreateInstances)
+- Lighthouse snapshots (CreateInstanceSnapshot)
 - TKE clusters (CreateCluster)
 - Auto Scaling groups (CreateAutoScalingGroup)
 - Auto Scaling launch configurations (CreateLaunchConfiguration)
@@ -67,7 +68,7 @@ from services.snapshot import handle_snapshot_tagging
 from services.tke import handle_tke_tagging
 from services.autoscaling import handle_asg_tagging, handle_lc_tagging
 from services.ccn import handle_ccn_tagging
-from services.lighthouse import handle_lighthouse_tagging
+from services.lighthouse import handle_lighthouse_tagging, handle_lighthouse_snapshot_tagging
 
 # Configuration from environment variables
 COS_BUCKET       = os.getenv("COS_BUCKET")
@@ -336,7 +337,7 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         - Track 4 (tagger-vpc-track): ResourceType="vpc" → AllocateAddresses, CreateNetworkInterface, CreateHaVip, TransformAddress, CreateNatGateway, CreatePrivateNatGateway, CreateCcn
         - Track 5 (tagger-tke-track): ResourceType="tke" → CreateCluster
         - Track 6 (tagger-as-track):  ResourceType="as"  → CreateAutoScalingGroup, CreateLaunchConfiguration
-        - Track 7 (tagger-lighthouse-track): ResourceType="lighthouse" → CreateInstances
+        - Track 7 (tagger-lighthouse-track): ResourceType="lighthouse" → CreateInstances, CreateInstanceSnapshot
         - All tracks deliver to same COS bucket → single SCF function processes all events
         
         Note: EIPs auto-allocated by NAT Gateway creation fire AllocateAddresses
@@ -361,7 +362,7 @@ def ensure_audit_track_to_cos(bucket_region: str, bucket: str) -> Optional[str]:
         {"name": "tagger-vpc-track", "resource_type": "vpc", "event_names": ["AllocateAddresses", "CreateNetworkInterface", "CreateHaVip", "TransformAddress", "CreateNatGateway", "CreatePrivateNatGateway", "CreateCcn"]},
         {"name": "tagger-tke-track", "resource_type": "tke", "event_names": ["CreateCluster"]},
         {"name": "tagger-as-track",  "resource_type": "as",  "event_names": ["CreateAutoScalingGroup", "CreateLaunchConfiguration"]},
-        {"name": "tagger-lighthouse-track", "resource_type": "lighthouse", "event_names": ["CreateInstances"]},
+        {"name": "tagger-lighthouse-track", "resource_type": "lighthouse", "event_names": ["*"]},
     ]
 
     # Prepare storage config
@@ -613,6 +614,11 @@ def main_handler(event, context):
                         if handle_lighthouse_tagging(rec):
                             tagged += 1
                         continue
+
+                if event_name == "CreateInstanceSnapshot":
+                    if handle_lighthouse_snapshot_tagging(rec):
+                        tagged += 1
+                    continue
 
                 # --- CVM/CDH events ---
                 if not should_tag(rec):

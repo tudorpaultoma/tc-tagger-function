@@ -28,7 +28,8 @@
         "tke:DescribeClusters",
         "as:DescribeAutoScalingGroups",
         "as:DescribeLaunchConfigurations",
-        "lighthouse:DescribeInstances"
+        "lighthouse:DescribeInstances",
+        "lighthouse:DescribeSnapshots"
       ],
       "resource": [
         "*"
