@@ -58,20 +58,17 @@ def build_lighthouse_tags(owner: str) -> List[Dict[str, str]]:
     ]
 
 
-def build_lighthouse_snapshot_tags(owner: str, instance_id: str = "",
-                                    disk_id: str = "", disk_usage: str = "") -> List[Dict[str, str]]:
+def build_lighthouse_snapshot_tags(owner: str, instance_id: str = "") -> List[Dict[str, str]]:
     """
     Build tags for Lighthouse snapshots.
 
     Tags (displayed alphabetically in console):
-    TaggerCanDelete → TaggerCreated → TaggerDiskUsage → TaggerOwner →
-    TaggerProject → TaggerSourceDisk → TaggerSourceInstance → TaggerTTL
+    TaggerCanDelete → TaggerCreated → TaggerOwner →
+    TaggerProject → TaggerSourceInstance → TaggerTTL
 
     Args:
         owner: Owner email/username
         instance_id: Source Lighthouse instance ID (lhins-xxx)
-        disk_id: Source Lighthouse disk ID (lhdisk-xxx)
-        disk_usage: Disk usage type (SYSTEM_DISK / DATA_DISK)
 
     Returns:
         List of tags to apply to Lighthouse snapshot
@@ -81,8 +78,6 @@ def build_lighthouse_snapshot_tags(owner: str, instance_id: str = "",
         {"TagKey": "TaggerOwner",          "TagValue": owner or "unknown"},
         {"TagKey": "TaggerCreated",        "TagValue": today},
         {"TagKey": "TaggerSourceInstance", "TagValue": instance_id or "unknown"},
-        {"TagKey": "TaggerSourceDisk",     "TagValue": disk_id or "unknown"},
-        {"TagKey": "TaggerDiskUsage",      "TagValue": disk_usage.upper() if disk_usage else "unknown"},
         {"TagKey": "TaggerCanDelete",      "TagValue": "YES"},
         {"TagKey": "TaggerTTL",            "TagValue": "3"},
         {"TagKey": "TaggerProject",        "TagValue": "n/a"},
@@ -611,17 +606,11 @@ def handle_lighthouse_snapshot_tagging(rec: Dict[str, Any]) -> bool:
 
     region = actual_region
 
-    disk_id = instance_id_for_tag = ""
-    disk_usage = ""
     if snap_info:
-        disk_id = snap_info.get("DiskId", "") or ""
-        disk_usage = snap_info.get("DiskUsage", "") or ""
         print(json.dumps({
             "info": "lighthouse_snapshot_details",
             "snap_id": snap_id,
             "state": snap_info.get("SnapshotState", ""),
-            "disk_id": disk_id,
-            "disk_usage": disk_usage,
             "disk_size_gb": snap_info.get("DiskSize", 0),
         }))
     else:
@@ -640,8 +629,6 @@ def handle_lighthouse_snapshot_tagging(rec: Dict[str, Any]) -> bool:
     tags = build_lighthouse_snapshot_tags(
         owner=owner,
         instance_id=instance_id or "",
-        disk_id=disk_id,
-        disk_usage=disk_usage
     )
 
     print(json.dumps({
